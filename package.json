@@ -1,0 +1,29 @@
+{
+  "name": "termpilot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mobile-first PWA for managing multiple terminal sessions remotely with voice control",
+  "scripts": {
+    "dev": "pnpm -r --parallel run dev",
+    "dev:server": "pnpm --filter @termpilot/server dev",
+    "dev:client": "pnpm --filter @termpilot/client dev",
+    "build": "pnpm -r run build",
+    "test": "pnpm -r run test",
+    "test:watch": "pnpm -r --parallel run test:watch",
+    "test:coverage": "pnpm -r run test:coverage",
+    "lint": "pnpm -r run lint",
+    "typecheck": "pnpm -r run typecheck",
+    "clean": "pnpm -r run clean",
+    "e2e": "pnpm --filter @termpilot/e2e test"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "node-pty"
+    ]
+  }
+}
