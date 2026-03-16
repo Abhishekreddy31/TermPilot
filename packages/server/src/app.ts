@@ -4,6 +4,7 @@ import { URL } from 'node:url';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { PtyManager } from './terminal/pty-manager.js';
+import { TmuxManager, type AttachResult } from './terminal/tmux-manager.js';
 import { AuthService, RateLimiter } from './auth/auth-service.js';
 
 export interface ServerOptions {
@@ -28,8 +29,12 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
     defaultShell: opts.defaultShell,
   });
 
-  // Track which sessions belong to which WebSocket
+  const tmuxManager = new TmuxManager();
+
+  // Track which sessions belong to which WebSocket (independent mode)
+  // Track tmux attach handles per WebSocket (mirror mode)
   const wsSessionMap = new Map<WebSocket, Set<string>>();
+  const wsMirrorMap = new Map<WebSocket, Map<string, AttachResult>>();
 
   const httpServer = createHttpServer((req: IncomingMessage, res: ServerResponse) => {
     // CORS and security headers
@@ -101,12 +106,12 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
         return;
       }
 
-      handleMessage(ws, msg, ptyManager, wsSessionMap);
+      handleMessage(ws, msg, ptyManager, tmuxManager, wsSessionMap, wsMirrorMap);
     });
 
     ws.on('close', () => {
       clearInterval(pingInterval);
-      // Clean up sessions owned by this WebSocket
+      // Clean up independent sessions owned by this WebSocket
       const sessions = wsSessionMap.get(ws);
       if (sessions) {
         for (const sid of sessions) {
@@ -118,6 +123,15 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
         }
       }
       wsSessionMap.delete(ws);
+
+      // Clean up mirror-mode attach handles
+      const mirrors = wsMirrorMap.get(ws);
+      if (mirrors) {
+        for (const [, handle] of mirrors) {
+          handle.cleanup();
+        }
+      }
+      wsMirrorMap.delete(ws);
     });
 
     ws.on('error', () => {
@@ -147,17 +161,20 @@ function handleMessage(
   ws: WebSocket,
   msg: Record<string, unknown>,
   ptyManager: PtyManager,
-  wsSessionMap: Map<WebSocket, Set<string>>
+  tmuxManager: TmuxManager,
+  wsSessionMap: Map<WebSocket, Set<string>>,
+  wsMirrorMap: Map<WebSocket, Map<string, AttachResult>>
 ): void {
   switch (msg.type) {
+    // === Independent mode ===
     case 'create':
       handleCreate(ws, msg, ptyManager, wsSessionMap);
       break;
     case 'input':
-      handleInput(ws, msg, ptyManager);
+      handleInput(ws, msg, ptyManager, wsMirrorMap);
       break;
     case 'resize':
-      handleResize(ws, msg, ptyManager);
+      handleResize(ws, msg, ptyManager, wsMirrorMap);
       break;
     case 'destroy':
       handleDestroy(ws, msg, ptyManager, wsSessionMap);
@@ -165,6 +182,27 @@ function handleMessage(
     case 'list':
       handleList(ws, ptyManager);
       break;
+
+    // === Mirror mode (tmux) ===
+    case 'tmux_list':
+      handleTmuxList(ws, tmuxManager);
+      break;
+    case 'tmux_attach':
+      handleTmuxAttach(ws, msg, tmuxManager, wsMirrorMap);
+      break;
+    case 'tmux_detach':
+      handleTmuxDetach(ws, msg, wsMirrorMap);
+      break;
+    case 'tmux_create':
+      handleTmuxCreate(ws, msg, tmuxManager);
+      break;
+    case 'tmux_kill':
+      handleTmuxKill(ws, msg, tmuxManager, wsMirrorMap);
+      break;
+    case 'tmux_windows':
+      handleTmuxWindows(ws, msg, tmuxManager);
+      break;
+
     default:
       sendError(ws, `Unknown message type: ${msg.type}`);
   }
@@ -219,7 +257,8 @@ function handleCreate(
 function handleInput(
   ws: WebSocket,
   msg: Record<string, unknown>,
-  ptyManager: PtyManager
+  ptyManager: PtyManager,
+  wsMirrorMap: Map<WebSocket, Map<string, AttachResult>>
 ): void {
   try {
     const sessionId = msg.sessionId as string;
@@ -228,6 +267,16 @@ function handleInput(
       sendError(ws, 'Invalid input message: sessionId and data required');
       return;
     }
+
+    // Check if this is a mirror-mode session first
+    const mirrors = wsMirrorMap.get(ws);
+    const mirror = mirrors?.get(sessionId);
+    if (mirror) {
+      mirror.pty.write(data);
+      return;
+    }
+
+    // Otherwise, independent session
     ptyManager.writeToSession(sessionId, data);
   } catch (err) {
     sendError(ws, (err as Error).message);
@@ -237,7 +286,8 @@ function handleInput(
 function handleResize(
   ws: WebSocket,
   msg: Record<string, unknown>,
-  ptyManager: PtyManager
+  ptyManager: PtyManager,
+  wsMirrorMap: Map<WebSocket, Map<string, AttachResult>>
 ): void {
   try {
     const sessionId = msg.sessionId as string;
@@ -247,6 +297,16 @@ function handleResize(
       sendError(ws, 'Invalid resize message');
       return;
     }
+
+    // Check if this is a mirror-mode session first
+    const mirrors = wsMirrorMap.get(ws);
+    const mirror = mirrors?.get(sessionId);
+    if (mirror) {
+      mirror.pty.resize(cols, rows);
+      return;
+    }
+
+    // Otherwise, independent session
     ptyManager.resizeSession(sessionId, cols, rows);
   } catch (err) {
     sendError(ws, (err as Error).message);
@@ -334,6 +394,177 @@ async function handleLogin(
   } catch {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Invalid request body' }));
+  }
+}
+
+// === Mirror mode (tmux) handlers ===
+
+async function handleTmuxList(ws: WebSocket, tmux: TmuxManager): Promise<void> {
+  try {
+    const sessions = await tmux.listSessions();
+    ws.send(JSON.stringify({ type: 'tmux_sessions', sessions }));
+  } catch (err) {
+    sendError(ws, (err as Error).message);
+  }
+}
+
+function handleTmuxAttach(
+  ws: WebSocket,
+  msg: Record<string, unknown>,
+  tmux: TmuxManager,
+  wsMirrorMap: Map<WebSocket, Map<string, AttachResult>>
+): void {
+  try {
+    const sessionName = msg.sessionName as string;
+    const cols = typeof msg.cols === 'number' ? msg.cols : 80;
+    const rows = typeof msg.rows === 'number' ? msg.rows : 24;
+
+    if (!sessionName) {
+      sendError(ws, 'sessionName required for tmux_attach');
+      return;
+    }
+
+    // Use sessionName as the mirror session ID
+    const mirrorId = `tmux:${sessionName}`;
+
+    let mirrors = wsMirrorMap.get(ws);
+    if (!mirrors) {
+      mirrors = new Map();
+      wsMirrorMap.set(ws, mirrors);
+    }
+
+    // Don't double-attach
+    if (mirrors.has(mirrorId)) {
+      sendError(ws, `Already attached to tmux session "${sessionName}"`);
+      return;
+    }
+
+    const handle = tmux.attachSession(sessionName, { cols, rows });
+
+    // Pipe tmux output to WebSocket
+    handle.pty.onData((data: string) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: 'output',
+          sessionId: mirrorId,
+          data,
+        }));
+      }
+    });
+
+    handle.pty.onExit(() => {
+      mirrors?.delete(mirrorId);
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: 'tmux_detached',
+          sessionId: mirrorId,
+          sessionName,
+        }));
+      }
+    });
+
+    mirrors.set(mirrorId, handle);
+
+    ws.send(JSON.stringify({
+      type: 'tmux_attached',
+      sessionId: mirrorId,
+      sessionName,
+    }));
+  } catch (err) {
+    sendError(ws, (err as Error).message);
+  }
+}
+
+function handleTmuxDetach(
+  ws: WebSocket,
+  msg: Record<string, unknown>,
+  wsMirrorMap: Map<WebSocket, Map<string, AttachResult>>
+): void {
+  const sessionName = msg.sessionName as string;
+  if (!sessionName) {
+    sendError(ws, 'sessionName required');
+    return;
+  }
+
+  const mirrorId = `tmux:${sessionName}`;
+  const mirrors = wsMirrorMap.get(ws);
+  const handle = mirrors?.get(mirrorId);
+
+  if (handle) {
+    handle.cleanup();
+    mirrors?.delete(mirrorId);
+    ws.send(JSON.stringify({
+      type: 'tmux_detached',
+      sessionId: mirrorId,
+      sessionName,
+    }));
+  } else {
+    sendError(ws, `Not attached to tmux session "${sessionName}"`);
+  }
+}
+
+async function handleTmuxCreate(
+  ws: WebSocket,
+  msg: Record<string, unknown>,
+  tmux: TmuxManager
+): Promise<void> {
+  try {
+    const name = msg.name as string;
+    if (!name) {
+      sendError(ws, 'name required for tmux_create');
+      return;
+    }
+    await tmux.createSession(name);
+    ws.send(JSON.stringify({ type: 'tmux_created', name }));
+  } catch (err) {
+    sendError(ws, (err as Error).message);
+  }
+}
+
+async function handleTmuxKill(
+  ws: WebSocket,
+  msg: Record<string, unknown>,
+  tmux: TmuxManager,
+  wsMirrorMap: Map<WebSocket, Map<string, AttachResult>>
+): Promise<void> {
+  try {
+    const name = msg.name as string;
+    if (!name) {
+      sendError(ws, 'name required for tmux_kill');
+      return;
+    }
+
+    // Detach first if attached
+    const mirrorId = `tmux:${name}`;
+    const mirrors = wsMirrorMap.get(ws);
+    const handle = mirrors?.get(mirrorId);
+    if (handle) {
+      handle.cleanup();
+      mirrors?.delete(mirrorId);
+    }
+
+    await tmux.killSession(name);
+    ws.send(JSON.stringify({ type: 'tmux_killed', name }));
+  } catch (err) {
+    sendError(ws, (err as Error).message);
+  }
+}
+
+async function handleTmuxWindows(
+  ws: WebSocket,
+  msg: Record<string, unknown>,
+  tmux: TmuxManager
+): Promise<void> {
+  try {
+    const sessionName = msg.sessionName as string;
+    if (!sessionName) {
+      sendError(ws, 'sessionName required');
+      return;
+    }
+    const windows = await tmux.getSessionWindows(sessionName);
+    ws.send(JSON.stringify({ type: 'tmux_windows', sessionName, windows }));
+  } catch (err) {
+    sendError(ws, (err as Error).message);
   }
 }
 

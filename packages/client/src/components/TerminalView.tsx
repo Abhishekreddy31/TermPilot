@@ -4,9 +4,18 @@ import { TerminalInstance } from './TerminalInstance.js';
 import { ExtraKeys } from './ExtraKeys.js';
 import { VoiceInput } from './VoiceInput.js';
 
+type Mode = 'independent' | 'mirror';
+
 interface Session {
   id: string;
   label: string;
+  mode: Mode;
+}
+
+interface TmuxSession {
+  name: string;
+  windows: number;
+  attached: boolean;
 }
 
 interface TerminalViewProps {
@@ -18,6 +27,9 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [connState, setConnState] = useState<ConnectionState>(wsClient.state);
+  const [mode, setMode] = useState<Mode>('independent');
+  const [tmuxSessions, setTmuxSessions] = useState<TmuxSession[]>([]);
+  const [showTmuxPicker, setShowTmuxPicker] = useState(false);
   const termRef = useRef<{ sendInput: (data: string) => void } | null>(null);
   const sessionCounter = useRef(0);
 
@@ -28,12 +40,13 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
 
   useEffect(() => {
     const unsub = wsClient.onMessage((msg: WsMessage) => {
+      // Independent mode responses
       if (msg.type === 'session_created') {
         const id = msg.sessionId as string;
         sessionCounter.current++;
         setSessions((prev) => [
           ...prev,
-          { id, label: `Shell ${sessionCounter.current}` },
+          { id, label: `Shell ${sessionCounter.current}`, mode: 'independent' },
         ]);
         setActiveSessionId(id);
       }
@@ -45,10 +58,45 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
           return next;
         });
         setActiveSessionId((prev) =>
-          prev === (msg.sessionId as string)
-            ? sessions.find((s) => s.id !== (msg.sessionId as string))?.id ?? null
+          prev === id
+            ? sessions.find((s) => s.id !== id)?.id ?? null
             : prev
         );
+      }
+
+      // Mirror mode responses
+      if (msg.type === 'tmux_sessions') {
+        setTmuxSessions(msg.sessions as TmuxSession[]);
+      }
+
+      if (msg.type === 'tmux_attached') {
+        const id = msg.sessionId as string;
+        const name = msg.sessionName as string;
+        setSessions((prev) => [
+          ...prev,
+          { id, label: `[tmux] ${name}`, mode: 'mirror' },
+        ]);
+        setActiveSessionId(id);
+        setShowTmuxPicker(false);
+      }
+
+      if (msg.type === 'tmux_detached') {
+        const id = msg.sessionId as string;
+        setSessions((prev) => prev.filter((s) => s.id !== id));
+        setActiveSessionId((prev) =>
+          prev === id
+            ? sessions.find((s) => s.id !== id)?.id ?? null
+            : prev
+        );
+      }
+
+      if (msg.type === 'tmux_created') {
+        // Refresh session list
+        wsClient.send({ type: 'tmux_list' });
+      }
+
+      if (msg.type === 'tmux_killed') {
+        wsClient.send({ type: 'tmux_list' });
       }
     });
     return unsub;
@@ -59,8 +107,13 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
   }, [wsClient]);
 
   const destroySession = useCallback(
-    (id: string) => {
-      wsClient.send({ type: 'destroy', sessionId: id });
+    (session: Session) => {
+      if (session.mode === 'mirror') {
+        const name = session.label.replace('[tmux] ', '');
+        wsClient.send({ type: 'tmux_detach', sessionName: name });
+      } else {
+        wsClient.send({ type: 'destroy', sessionId: session.id });
+      }
     },
     [wsClient]
   );
@@ -82,12 +135,30 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
     [wsClient, activeSessionId]
   );
 
-  // Create first session on connect
+  const openTmuxPicker = useCallback(() => {
+    wsClient.send({ type: 'tmux_list' });
+    setShowTmuxPicker(true);
+  }, [wsClient]);
+
+  const attachTmux = useCallback(
+    (name: string) => {
+      // Check if already attached
+      if (sessions.some((s) => s.id === `tmux:${name}`)) {
+        setActiveSessionId(`tmux:${name}`);
+        setShowTmuxPicker(false);
+        return;
+      }
+      wsClient.send({ type: 'tmux_attach', sessionName: name, cols: 80, rows: 24 });
+    },
+    [wsClient, sessions]
+  );
+
+  // Create first session on connect (independent mode only)
   useEffect(() => {
-    if (connState === 'connected' && sessions.length === 0) {
+    if (connState === 'connected' && sessions.length === 0 && mode === 'independent') {
       createSession();
     }
-  }, [connState, sessions.length, createSession]);
+  }, [connState, sessions.length, createSession, mode]);
 
   const statusClass =
     connState === 'connected'
@@ -105,6 +176,20 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
         </div>
         <div class="header-actions">
           <button
+            class={`mode-btn ${mode === 'independent' ? 'mode-active' : ''}`}
+            onClick={() => setMode('independent')}
+            title="Independent sessions"
+          >
+            New
+          </button>
+          <button
+            class={`mode-btn ${mode === 'mirror' ? 'mode-active' : ''}`}
+            onClick={() => { setMode('mirror'); openTmuxPicker(); }}
+            title="Mirror existing terminals (tmux)"
+          >
+            Mirror
+          </button>
+          <button
             onClick={onLogout}
             style={{
               background: 'none',
@@ -121,11 +206,52 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
         </div>
       </div>
 
+      {/* Tmux session picker overlay */}
+      {showTmuxPicker && (
+        <div class="tmux-picker">
+          <div class="tmux-picker-header">
+            <span>tmux Sessions</span>
+            <button onClick={() => setShowTmuxPicker(false)} class="close-btn">x</button>
+          </div>
+          {tmuxSessions.length === 0 ? (
+            <div class="tmux-empty">
+              No tmux sessions found. Start one with:
+              <code>tmux new -s myproject</code>
+            </div>
+          ) : (
+            <div class="tmux-list">
+              {tmuxSessions.map((ts) => {
+                const isAttached = sessions.some((s) => s.id === `tmux:${ts.name}`);
+                return (
+                  <button
+                    key={ts.name}
+                    class={`tmux-item ${isAttached ? 'attached' : ''}`}
+                    onClick={() => attachTmux(ts.name)}
+                  >
+                    <span class="tmux-name">{ts.name}</span>
+                    <span class="tmux-meta">
+                      {ts.windows} window{ts.windows !== 1 ? 's' : ''}
+                      {isAttached ? ' (attached)' : ''}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <button
+            class="tmux-refresh"
+            onClick={() => wsClient.send({ type: 'tmux_list' })}
+          >
+            Refresh
+          </button>
+        </div>
+      )}
+
       <div class="session-tabs">
         {sessions.map((s) => (
           <button
             key={s.id}
-            class={`session-tab ${s.id === activeSessionId ? 'active' : ''}`}
+            class={`session-tab ${s.id === activeSessionId ? 'active' : ''} ${s.mode === 'mirror' ? 'mirror-tab' : ''}`}
             onClick={() => setActiveSessionId(s.id)}
           >
             {s.label}
@@ -133,16 +259,23 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
               class="close-btn"
               onClick={(e) => {
                 e.stopPropagation();
-                destroySession(s.id);
+                destroySession(s);
               }}
             >
               x
             </button>
           </button>
         ))}
-        <button class="new-tab-btn" onClick={createSession} title="New terminal">
-          +
-        </button>
+        {mode === 'independent' && (
+          <button class="new-tab-btn" onClick={createSession} title="New terminal">
+            +
+          </button>
+        )}
+        {mode === 'mirror' && (
+          <button class="new-tab-btn" onClick={openTmuxPicker} title="Attach to tmux session">
+            +
+          </button>
+        )}
       </div>
 
       <div class="terminal-wrapper">
