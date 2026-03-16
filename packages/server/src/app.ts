@@ -1,6 +1,8 @@
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { URL } from 'node:url';
+import { readFileSync, existsSync } from 'node:fs';
+import { join, extname } from 'node:path';
 import { PtyManager } from './terminal/pty-manager.js';
 import { AuthService, RateLimiter } from './auth/auth-service.js';
 
@@ -56,9 +58,8 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
       return;
     }
 
-    // Serve static files for the client (in production)
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Not found' }));
+    // Serve static files for the built client
+    serveStatic(req, res);
   });
 
   const wss = new WebSocketServer({
@@ -340,4 +341,57 @@ function sendError(ws: WebSocket, message: string, sessionId?: string): void {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'error', message, sessionId }));
   }
+}
+
+const MIME_TYPES: Record<string, string> = {
+  '.html': 'text/html',
+  '.js': 'application/javascript',
+  '.css': 'text/css',
+  '.json': 'application/json',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
+  '.webmanifest': 'application/manifest+json',
+};
+
+// Resolve client dist directory (relative to server package)
+const CLIENT_DIST = join(new URL('.', import.meta.url).pathname, '..', '..', 'client', 'dist');
+
+function serveStatic(req: IncomingMessage, res: ServerResponse): void {
+  const url = new URL(req.url || '/', `http://${req.headers.host}`);
+  let filePath = join(CLIENT_DIST, url.pathname === '/' ? 'index.html' : url.pathname);
+
+  // Prevent path traversal
+  if (!filePath.startsWith(CLIENT_DIST)) {
+    res.writeHead(403);
+    res.end('Forbidden');
+    return;
+  }
+
+  // Try the exact file, then fallback to index.html (SPA routing)
+  if (!existsSync(filePath)) {
+    filePath = join(CLIENT_DIST, 'index.html');
+  }
+
+  if (!existsSync(filePath)) {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Not found. Build the client first: pnpm --filter @termpilot/client build' }));
+    return;
+  }
+
+  const ext = extname(filePath);
+  const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+  const content = readFileSync(filePath);
+
+  // Cache static assets (hashed filenames)
+  const cacheControl = ext === '.html' || ext === '.webmanifest'
+    ? 'no-cache'
+    : 'public, max-age=31536000, immutable';
+
+  res.writeHead(200, {
+    'Content-Type': contentType,
+    'Cache-Control': cacheControl,
+  });
+  res.end(content);
 }
