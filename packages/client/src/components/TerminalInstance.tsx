@@ -54,8 +54,9 @@ export const TerminalInstance = forwardRef<
         brightCyan: '#56d4dd',
         brightWhite: '#f0f6fc',
       },
-      scrollback: 2000,
+      scrollback: 5000,
       allowProposedApi: true,
+      overviewRuler: {},
     });
 
     const fitAddon = new FitAddon();
@@ -111,11 +112,47 @@ export const TerminalInstance = forwardRef<
       vv.addEventListener('resize', handleResize);
     }
 
-    // Focus terminal on touch
-    const handleTouch = () => term.focus();
-    containerRef.current.addEventListener('touchstart', handleTouch, {
-      passive: true,
-    });
+    // Mobile touch scrolling: track swipe gestures to scroll terminal
+    let touchStartY = 0;
+    let touchStartX = 0;
+    let isScrolling = false;
+
+    const handleTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 1) {
+        touchStartY = e.touches[0].clientY;
+        touchStartX = e.touches[0].clientX;
+        isScrolling = false;
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+
+      const deltaY = touchStartY - e.touches[0].clientY;
+      const deltaX = Math.abs(touchStartX - e.touches[0].clientX);
+
+      // If vertical movement is greater than horizontal, it's a scroll
+      if (Math.abs(deltaY) > 10 && Math.abs(deltaY) > deltaX) {
+        isScrolling = true;
+        const lines = Math.round(deltaY / 20);
+        if (lines !== 0) {
+          term.scrollLines(lines);
+          touchStartY = e.touches[0].clientY;
+        }
+      }
+    };
+
+    const handleTouchEnd = () => {
+      // Only focus (show keyboard) on tap, not after scrolling
+      if (!isScrolling) {
+        term.focus();
+      }
+    };
+
+    const container = containerRef.current;
+    container.addEventListener('touchstart', handleTouchStart, { passive: true });
+    container.addEventListener('touchmove', handleTouchMove, { passive: true });
+    container.addEventListener('touchend', handleTouchEnd, { passive: true });
 
     return () => {
       clearTimeout(resizeTimeout);
@@ -124,7 +161,9 @@ export const TerminalInstance = forwardRef<
       msgUnsub();
       window.removeEventListener('resize', handleResize);
       if (vv) vv.removeEventListener('resize', handleResize);
-      containerRef.current?.removeEventListener('touchstart', handleTouch);
+      container.removeEventListener('touchstart', handleTouchStart);
+      container.removeEventListener('touchmove', handleTouchMove);
+      container.removeEventListener('touchend', handleTouchEnd);
       term.dispose();
     };
   }, [sessionId, wsClient]);

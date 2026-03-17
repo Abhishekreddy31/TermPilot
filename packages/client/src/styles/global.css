@@ -90,6 +90,12 @@ body {
 
 .xterm-viewport {
   overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Allow touch scrolling on the terminal */
+.xterm .xterm-screen {
+  touch-action: pan-y;
 }
 
 /* ==================== Header ==================== */
