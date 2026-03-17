@@ -10,7 +10,7 @@ interface TerminalInstanceProps {
 }
 
 export const TerminalInstance = forwardRef<
-  { sendInput: (data: string) => void },
+  { sendInput: (data: string) => void; scrollUp: () => void; scrollDown: () => void },
   TerminalInstanceProps
 >(({ sessionId, wsClient }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -20,6 +20,12 @@ export const TerminalInstance = forwardRef<
   useImperativeHandle(ref, () => ({
     sendInput: (data: string) => {
       wsClient.send({ type: 'input', sessionId, data });
+    },
+    scrollUp: () => {
+      termRef.current?.scrollLines(-5);
+    },
+    scrollDown: () => {
+      termRef.current?.scrollLines(5);
     },
   }));
 
@@ -56,17 +62,14 @@ export const TerminalInstance = forwardRef<
       },
       scrollback: 5000,
       allowProposedApi: true,
-      overviewRuler: {},
     });
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(containerRef.current);
 
-    // Fit after rendering
     requestAnimationFrame(() => {
       fitAddon.fit();
-      // Send initial size to server
       wsClient.send({
         type: 'resize',
         sessionId,
@@ -78,81 +81,89 @@ export const TerminalInstance = forwardRef<
     termRef.current = term;
     fitRef.current = fitAddon;
 
-    // User input -> server
     const dataDisposable = term.onData((data: string) => {
       wsClient.send({ type: 'input', sessionId, data });
     });
 
-    // Server output -> terminal
     const msgUnsub = wsClient.onMessage((msg: WsMessage) => {
       if (msg.type === 'output' && msg.sessionId === sessionId) {
         term.write(msg.data as string);
       }
     });
 
-    // Resize handler
     const resizeDisposable = term.onResize(({ cols, rows }) => {
       wsClient.send({ type: 'resize', sessionId, cols, rows });
     });
 
-    // Window/viewport resize
     let resizeTimeout: ReturnType<typeof setTimeout>;
     const handleResize = () => {
       clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(() => {
-        fitAddon.fit();
-      }, 150);
+      resizeTimeout = setTimeout(() => fitAddon.fit(), 150);
     };
 
     window.addEventListener('resize', handleResize);
-
-    // Visual viewport (mobile keyboard show/hide)
     const vv = window.visualViewport;
-    if (vv) {
-      vv.addEventListener('resize', handleResize);
-    }
+    if (vv) vv.addEventListener('resize', handleResize);
 
-    // Mobile touch scrolling: track swipe gestures to scroll terminal
-    let touchStartY = 0;
-    let touchStartX = 0;
-    let isScrolling = false;
+    // === Touch scroll via capture phase ===
+    // We intercept touch events in the capture phase (before xterm.js sees them).
+    // If user swipes vertically, we stopPropagation so xterm.js doesn't interfere,
+    // and call term.scrollLines() ourselves.
+    const container = containerRef.current;
+    let startY = 0;
+    let startX = 0;
+    let startTime = 0;
+    let scrolled = false;
+    let lastY = 0;
 
-    const handleTouchStart = (e: TouchEvent) => {
+    const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length === 1) {
-        touchStartY = e.touches[0].clientY;
-        touchStartX = e.touches[0].clientX;
-        isScrolling = false;
+        startY = e.touches[0].clientY;
+        startX = e.touches[0].clientX;
+        lastY = startY;
+        startTime = Date.now();
+        scrolled = false;
       }
     };
 
-    const handleTouchMove = (e: TouchEvent) => {
+    const onTouchMove = (e: TouchEvent) => {
       if (e.touches.length !== 1) return;
 
-      const deltaY = touchStartY - e.touches[0].clientY;
-      const deltaX = Math.abs(touchStartX - e.touches[0].clientX);
+      const curY = e.touches[0].clientY;
+      const curX = e.touches[0].clientX;
+      const totalMovedY = Math.abs(startY - curY);
+      const totalMovedX = Math.abs(startX - curX);
 
-      // If vertical movement is greater than horizontal, it's a scroll
-      if (Math.abs(deltaY) > 10 && Math.abs(deltaY) > deltaX) {
-        isScrolling = true;
-        const lines = Math.round(deltaY / 20);
+      if (totalMovedY > 10 && totalMovedY > totalMovedX) {
+        scrolled = true;
+        // Stop xterm.js from handling this touch
+        e.stopPropagation();
+        e.preventDefault();
+
+        const delta = lastY - curY;
+        lastY = curY;
+
+        // Each 16px of finger movement = 1 line
+        const lines = Math.round(delta / 16);
         if (lines !== 0) {
           term.scrollLines(lines);
-          touchStartY = e.touches[0].clientY;
         }
       }
     };
 
-    const handleTouchEnd = () => {
-      // Only focus (show keyboard) on tap, not after scrolling
-      if (!isScrolling) {
+    const onTouchEnd = () => {
+      if (!scrolled && (Date.now() - startTime) < 300) {
         term.focus();
       }
     };
 
-    const container = containerRef.current;
-    container.addEventListener('touchstart', handleTouchStart, { passive: true });
-    container.addEventListener('touchmove', handleTouchMove, { passive: true });
-    container.addEventListener('touchend', handleTouchEnd, { passive: true });
+    // capture: true fires BEFORE xterm.js's own handlers
+    container.addEventListener('touchstart', onTouchStart, { capture: true, passive: true });
+    container.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
+    container.addEventListener('touchend', onTouchEnd, { capture: true, passive: true });
+
+    // Also handle tap to focus
+    container.addEventListener('click', () => term.focus());
 
     return () => {
       clearTimeout(resizeTimeout);
@@ -161,9 +172,9 @@ export const TerminalInstance = forwardRef<
       msgUnsub();
       window.removeEventListener('resize', handleResize);
       if (vv) vv.removeEventListener('resize', handleResize);
-      container.removeEventListener('touchstart', handleTouchStart);
-      container.removeEventListener('touchmove', handleTouchMove);
-      container.removeEventListener('touchend', handleTouchEnd);
+      container.removeEventListener('touchstart', onTouchStart, { capture: true });
+      container.removeEventListener('touchmove', onTouchMove, { capture: true });
+      container.removeEventListener('touchend', onTouchEnd, { capture: true });
       term.dispose();
     };
   }, [sessionId, wsClient]);

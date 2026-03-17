@@ -122,6 +122,14 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
     termRef.current?.sendInput(data);
   }, []);
 
+  const handleScrollUp = useCallback(() => {
+    termRef.current?.scrollUp();
+  }, []);
+
+  const handleScrollDown = useCallback(() => {
+    termRef.current?.scrollDown();
+  }, []);
+
   const handleVoiceCommand = useCallback(
     (command: string) => {
       if (activeSessionId) {
@@ -279,7 +287,7 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
       </div>
 
       <VoiceInput onCommand={handleVoiceCommand} />
-      <ExtraKeys onKey={handleExtraKey} />
+      <ExtraKeys onKey={handleExtraKey} onScrollUp={handleScrollUp} onScrollDown={handleScrollDown} />
     </div>
   );
 }

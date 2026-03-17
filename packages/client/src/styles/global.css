@@ -89,13 +89,8 @@ body {
 }
 
 .xterm-viewport {
-  overflow-y: auto !important;
+  overflow-y: scroll !important;
   -webkit-overflow-scrolling: touch;
-}
-
-/* Allow touch scrolling on the terminal */
-.xterm .xterm-screen {
-  touch-action: pan-y;
 }
 
 /* ==================== Header ==================== */
@@ -366,6 +361,10 @@ body {
   background: var(--accent-blue);
   border-color: var(--accent-blue);
   color: #fff;
+}
+
+.extra-key.scroll-key {
+  color: var(--accent-cyan);
 }
 
 /* ==================== Voice Input ==================== */
