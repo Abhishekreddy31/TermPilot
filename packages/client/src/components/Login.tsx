@@ -28,7 +28,11 @@ export function Login({ onLogin }: LoginProps) {
 
   return (
     <form class="login-screen" onSubmit={handleSubmit}>
-      <h1>TermPilot</h1>
+      <div class="login-brand">
+        <div class="logo">&gt;_</div>
+        <h1>TermPilot</h1>
+        <p>Remote terminal management</p>
+      </div>
       <input
         type="text"
         placeholder="Username"
@@ -45,7 +49,7 @@ export function Login({ onLogin }: LoginProps) {
         autoComplete="current-password"
         required
       />
-      <button type="submit" disabled={loading}>
+      <button class="login-btn" type="submit" disabled={loading}>
         {loading ? 'Signing in...' : 'Sign In'}
       </button>
       {error && <p class="error">{error}</p>}

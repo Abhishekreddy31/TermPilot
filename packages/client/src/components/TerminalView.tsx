@@ -170,7 +170,7 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
   return (
     <div class="terminal-container">
       <div class="header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div class="header-brand">
           <span class={`status-dot ${statusClass}`} />
           <h1>TermPilot</h1>
         </div>
@@ -180,7 +180,7 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
             onClick={() => setMode('independent')}
             title="Independent sessions"
           >
-            New
+            Sessions
           </button>
           <button
             class={`mode-btn ${mode === 'mirror' ? 'mode-active' : ''}`}
@@ -189,18 +189,7 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
           >
             Mirror
           </button>
-          <button
-            onClick={onLogout}
-            style={{
-              background: 'none',
-              border: '1px solid #555',
-              color: '#969696',
-              padding: '4px 10px',
-              borderRadius: '4px',
-              fontSize: '12px',
-              cursor: 'pointer',
-            }}
-          >
+          <button class="btn btn-ghost btn-danger" onClick={onLogout}>
             Logout
           </button>
         </div>
