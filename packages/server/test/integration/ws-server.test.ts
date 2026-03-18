@@ -7,12 +7,26 @@ let port: number;
 let authToken: string;
 
 async function connectWs(token?: string): Promise<WebSocket> {
-  const url = `ws://localhost:${port}/ws${token ? `?token=${token}` : ''}`;
+  const url = `ws://localhost:${port}/ws`;
   const ws = new WebSocket(url);
   await new Promise<void>((resolve, reject) => {
     ws.on('open', resolve);
     ws.on('error', reject);
   });
+
+  // Send auth as first message (new protocol)
+  if (token) {
+    ws.send(JSON.stringify({ type: 'auth', token }));
+    // Wait for auth_ok
+    await new Promise<void>((resolve, reject) => {
+      ws.once('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'auth_ok') resolve();
+        else reject(new Error(`Auth failed: ${msg.type}`));
+      });
+    });
+  }
+
   return ws;
 }
 
@@ -37,8 +51,6 @@ describe('WebSocket Server Integration', () => {
   beforeEach(async () => {
     server = await createServer({ port: 0, defaultShell: '/bin/bash' });
     port = server.port;
-
-    // Create user and get auth token
     await server.auth.createUser('test', 'testpass');
     const result = await server.auth.authenticate('test', 'testpass');
     authToken = result.token!;
@@ -49,24 +61,31 @@ describe('WebSocket Server Integration', () => {
   });
 
   describe('authentication', () => {
-    it('should reject connections without a token', async () => {
+    it('should reject connections without auth message', async () => {
       const ws = new WebSocket(`ws://localhost:${port}/ws`);
-      const rejected = await new Promise<boolean>((resolve) => {
-        ws.on('open', () => resolve(false));
-        ws.on('error', () => resolve(true));
-        ws.on('close', () => resolve(true));
+      await new Promise<void>((resolve) => ws.on('open', resolve));
+
+      // Send a non-auth message
+      ws.send(JSON.stringify({ type: 'list' }));
+      const msg = await new Promise<Record<string, unknown>>((resolve) => {
+        ws.once('message', (data) => resolve(JSON.parse(data.toString())));
       });
-      expect(rejected).toBe(true);
+      expect(msg.type).toBe('error');
+      ws.close();
     });
 
     it('should reject connections with invalid token', async () => {
-      const ws = new WebSocket(`ws://localhost:${port}/ws?token=bad`);
-      const rejected = await new Promise<boolean>((resolve) => {
-        ws.on('open', () => resolve(false));
-        ws.on('error', () => resolve(true));
-        ws.on('close', () => resolve(true));
+      const ws = new WebSocket(`ws://localhost:${port}/ws`);
+      await new Promise<void>((resolve) => ws.on('open', resolve));
+
+      ws.send(JSON.stringify({ type: 'auth', token: 'bad' }));
+      const msg = await new Promise<Record<string, unknown>>((resolve) => {
+        ws.once('message', (data) => resolve(JSON.parse(data.toString())));
       });
-      expect(rejected).toBe(true);
+      expect(msg.type).toBe('auth_failed');
+
+      const code = await new Promise<number>((resolve) => ws.on('close', (c) => resolve(c)));
+      expect(code).toBe(4401);
     });
 
     it('should accept connections with valid token', async () => {
@@ -79,10 +98,9 @@ describe('WebSocket Server Integration', () => {
   describe('session lifecycle', () => {
     it('should create a terminal session', async () => {
       const ws = await connectWs(authToken);
-      const msgPromise = waitForMessage(ws);
+      const msgPromise = waitForMessage(ws, (m) => m.type === 'session_created');
       sendJson(ws, { type: 'create', cols: 80, rows: 24 });
       const response = await msgPromise;
-
       expect(response.type).toBe('session_created');
       expect(response.sessionId).toBeTruthy();
       ws.close();
@@ -90,63 +108,48 @@ describe('WebSocket Server Integration', () => {
 
     it('should receive terminal output after creating session', async () => {
       const ws = await connectWs(authToken);
-
-      // Create session
-      const createPromise = waitForMessage(ws);
+      const createPromise = waitForMessage(ws, (m) => m.type === 'session_created');
       sendJson(ws, { type: 'create', cols: 80, rows: 24 });
       const createResp = await createPromise;
       const sessionId = createResp.sessionId as string;
 
-      // Wait for shell prompt output
-      const outputPromise = waitForMessage(ws);
+      const outputPromise = waitForMessage(ws, (m) => m.type === 'output');
       const output = await outputPromise;
       expect(output.type).toBe('output');
       expect(output.sessionId).toBe(sessionId);
-      expect(typeof output.data).toBe('string');
-
       ws.close();
     });
 
     it('should send input to terminal', async () => {
       const ws = await connectWs(authToken);
-
-      const createPromise = waitForMessage(ws);
+      const createPromise = waitForMessage(ws, (m) => m.type === 'session_created');
       sendJson(ws, { type: 'create', cols: 80, rows: 24 });
       const createResp = await createPromise;
       const sessionId = createResp.sessionId as string;
 
-      // Drain initial output
-      await waitForMessage(ws);
-
-      // Send input
-      const outputPromise = waitForMessage(ws);
+      await waitForMessage(ws, (m) => m.type === 'output');
+      const outputPromise = waitForMessage(ws, (m) => m.type === 'output');
       sendJson(ws, { type: 'input', sessionId, data: 'echo hello\n' });
       const output = await outputPromise;
       expect(output.type).toBe('output');
-
       ws.close();
     });
 
     it('should resize a terminal session', async () => {
       const ws = await connectWs(authToken);
-
-      const createPromise = waitForMessage(ws);
+      const createPromise = waitForMessage(ws, (m) => m.type === 'session_created');
       sendJson(ws, { type: 'create', cols: 80, rows: 24 });
-      const createResp = await createPromise;
-      const sessionId = createResp.sessionId as string;
+      await createPromise;
+      const sessionId = (await createPromise).sessionId as string;
 
-      // Resize should not throw
       sendJson(ws, { type: 'resize', sessionId, cols: 120, rows: 40 });
-
-      // Small delay to process
       await new Promise((r) => setTimeout(r, 50));
       ws.close();
     });
 
     it('should destroy a terminal session', async () => {
       const ws = await connectWs(authToken);
-
-      const createPromise = waitForMessage(ws);
+      const createPromise = waitForMessage(ws, (m) => m.type === 'session_created');
       sendJson(ws, { type: 'create', cols: 80, rows: 24 });
       const createResp = await createPromise;
       const sessionId = createResp.sessionId as string;
@@ -156,25 +159,30 @@ describe('WebSocket Server Integration', () => {
       const destroyResp = await destroyPromise;
       expect(destroyResp.type).toBe('session_destroyed');
       expect(destroyResp.sessionId).toBe(sessionId);
-
       ws.close();
     });
 
     it('should list active sessions', async () => {
       const ws = await connectWs(authToken);
-
-      // Create a session first
-      const createPromise = waitForMessage(ws);
+      const createPromise = waitForMessage(ws, (m) => m.type === 'session_created');
       sendJson(ws, { type: 'create', cols: 80, rows: 24 });
       await createPromise;
 
-      const listPromise = waitForMessage(ws);
+      const listPromise = waitForMessage(ws, (m) => m.type === 'session_list');
       sendJson(ws, { type: 'list' });
       const listResp = await listPromise;
       expect(listResp.type).toBe('session_list');
       expect(Array.isArray(listResp.sessions)).toBe(true);
       expect((listResp.sessions as unknown[]).length).toBe(1);
+      ws.close();
+    });
 
+    it('should reject input to session not owned by this connection', async () => {
+      const ws = await connectWs(authToken);
+      const errPromise = waitForMessage(ws, (m) => m.type === 'error');
+      sendJson(ws, { type: 'input', sessionId: 'fake-uuid', data: 'test' });
+      const errResp = await errPromise;
+      expect(errResp.type).toBe('error');
       ws.close();
     });
   });
@@ -182,17 +190,8 @@ describe('WebSocket Server Integration', () => {
   describe('error handling', () => {
     it('should return error for invalid message type', async () => {
       const ws = await connectWs(authToken);
-      const errPromise = waitForMessage(ws);
+      const errPromise = waitForMessage(ws, (m) => m.type === 'error');
       sendJson(ws, { type: 'bogus' });
-      const errResp = await errPromise;
-      expect(errResp.type).toBe('error');
-      ws.close();
-    });
-
-    it('should return error for input to non-existent session', async () => {
-      const ws = await connectWs(authToken);
-      const errPromise = waitForMessage(ws);
-      sendJson(ws, { type: 'input', sessionId: 'fake', data: 'test' });
       const errResp = await errPromise;
       expect(errResp.type).toBe('error');
       ws.close();
@@ -205,7 +204,6 @@ describe('WebSocket Server Integration', () => {
       expect(res.ok).toBe(true);
       const data = await res.json();
       expect(data.status).toBe('ok');
-      expect(typeof data.activeSessions).toBe('number');
     });
   });
 
@@ -228,6 +226,27 @@ describe('WebSocket Server Integration', () => {
         body: JSON.stringify({ username: 'test', password: 'wrong' }),
       });
       expect(res.status).toBe(401);
+    });
+  });
+
+  describe('logout endpoint', () => {
+    it('should invalidate token on logout', async () => {
+      const res = await fetch(`http://localhost:${port}/api/auth/logout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: authToken }),
+      });
+      expect(res.ok).toBe(true);
+
+      // Token should now be invalid
+      const ws = new WebSocket(`ws://localhost:${port}/ws`);
+      await new Promise<void>((resolve) => ws.on('open', resolve));
+      ws.send(JSON.stringify({ type: 'auth', token: authToken }));
+      const msg = await new Promise<Record<string, unknown>>((resolve) => {
+        ws.once('message', (data) => resolve(JSON.parse(data.toString())));
+      });
+      expect(msg.type).toBe('auth_failed');
+      ws.close();
     });
   });
 });

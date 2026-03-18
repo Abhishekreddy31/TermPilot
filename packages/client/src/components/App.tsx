@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { Login } from './Login.js';
 import { TerminalView } from './TerminalView.js';
-import { getStoredToken, storeToken, clearToken } from '../services/api.js';
+import { getStoredToken, storeToken, clearToken, logout as apiLogout } from '../services/api.js';
 import { WsClient } from '../services/ws-client.js';
 
 export function App() {
@@ -14,7 +14,10 @@ export function App() {
   }, []);
 
   const handleLogout = useCallback(() => {
+    const currentToken = getStoredToken();
     wsClient?.disconnect();
+    // Invalidate session server-side
+    if (currentToken) apiLogout(currentToken).catch(() => {});
     clearToken();
     setToken(null);
     setWsClient(null);
@@ -27,7 +30,17 @@ export function App() {
     setWsClient(client);
     client.connect();
 
+    // If auth fails (token expired), auto-logout
+    const unsub = client.onStateChange((state) => {
+      if (state === 'auth_failed') {
+        clearToken();
+        setToken(null);
+        setWsClient(null);
+      }
+    });
+
     return () => {
+      unsub();
       client.disconnect();
     };
   }, [token]);

@@ -1,4 +1,4 @@
-export type ConnectionState = 'connecting' | 'connected' | 'disconnected';
+export type ConnectionState = 'connecting' | 'connected' | 'disconnected' | 'auth_failed';
 
 export interface WsMessage {
   type: string;
@@ -73,19 +73,35 @@ export class WsClient {
 
     this.setState('connecting');
 
+    // Token is NOT in the URL — sent as first message after connection
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${protocol}//${location.host}/ws?token=${this.token}`;
+    const url = `${protocol}//${location.host}/ws`;
     this.ws = new WebSocket(url);
 
     this.ws.onopen = () => {
-      this.setState('connected');
-      this.reconnectDelay = 1000;
-      this.reconnectAttempts = 0;
+      // Send auth token as first message (not in URL to prevent log leakage)
+      this.ws?.send(JSON.stringify({ type: 'auth', token: this.token }));
     };
 
     this.ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data) as WsMessage;
+
+        // Handle auth response
+        if (msg.type === 'auth_ok') {
+          this.setState('connected');
+          this.reconnectDelay = 1000;
+          this.reconnectAttempts = 0;
+          return;
+        }
+
+        if (msg.type === 'auth_failed') {
+          this.shouldReconnect = false;
+          this.setState('auth_failed');
+          this.ws?.close();
+          return;
+        }
+
         for (const handler of this.messageHandlers) {
           handler(msg);
         }
@@ -96,26 +112,22 @@ export class WsClient {
 
     this.ws.onclose = () => {
       this.ws = null;
-      this.setState('disconnected');
+      if (this._state !== 'auth_failed') {
+        this.setState('disconnected');
+      }
 
       if (this.shouldReconnect && this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
         this.reconnectAttempts++;
         setTimeout(() => this.doConnect(), this.reconnectDelay);
-        this.reconnectDelay = Math.min(
-          this.reconnectDelay * 2,
-          this.maxReconnectDelay
-        );
+        this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay);
       }
     };
 
-    this.ws.onerror = () => {
-      // Will trigger onclose
-    };
+    this.ws.onerror = () => {};
   }
 
   private setState(state: ConnectionState): void {
     if (this._state === state) return;
-    const prevState = this._state;
     this._state = state;
     for (const handler of this.stateHandlers) {
       handler(state);

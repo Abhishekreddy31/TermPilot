@@ -32,3 +32,15 @@ export function storeToken(token: string): void {
 export function clearToken(): void {
   sessionStorage.removeItem('termpilot_token');
 }
+
+export async function logout(token: string): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/api/auth/logout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+  } catch {
+    // Ignore — best-effort server-side invalidation
+  }
+}

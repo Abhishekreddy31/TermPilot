@@ -8,11 +8,22 @@ let port: number;
 let authToken: string;
 
 async function connectWs(token: string): Promise<WebSocket> {
-  const ws = new WebSocket(`ws://localhost:${port}/ws?token=${token}`);
+  const ws = new WebSocket(`ws://localhost:${port}/ws`);
   await new Promise<void>((resolve, reject) => {
     ws.on('open', resolve);
     ws.on('error', reject);
   });
+
+  // Auth via first message
+  ws.send(JSON.stringify({ type: 'auth', token }));
+  await new Promise<void>((resolve, reject) => {
+    ws.once('message', (data) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.type === 'auth_ok') resolve();
+      else reject(new Error(`Auth failed: ${msg.type}`));
+    });
+  });
+
   return ws;
 }
 
