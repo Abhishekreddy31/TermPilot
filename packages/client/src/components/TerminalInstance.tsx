@@ -163,7 +163,8 @@ export const TerminalInstance = forwardRef<
     container.addEventListener('touchend', onTouchEnd, { capture: true, passive: true });
 
     // Also handle tap to focus
-    container.addEventListener('click', () => term.focus());
+    const handleClick = () => term.focus();
+    container.addEventListener('click', handleClick);
 
     return () => {
       clearTimeout(resizeTimeout);
@@ -175,6 +176,7 @@ export const TerminalInstance = forwardRef<
       container.removeEventListener('touchstart', onTouchStart, { capture: true });
       container.removeEventListener('touchmove', onTouchMove, { capture: true });
       container.removeEventListener('touchend', onTouchEnd, { capture: true });
+      container.removeEventListener('click', handleClick);
       term.dispose();
     };
   }, [sessionId, wsClient]);

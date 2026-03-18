@@ -1,8 +1,8 @@
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { URL } from 'node:url';
-import { readFileSync, existsSync } from 'node:fs';
-import { join, extname } from 'node:path';
+import { readFile, access } from 'node:fs/promises';
+import { join, extname, resolve } from 'node:path';
 import { PtyManager } from './terminal/pty-manager.js';
 import { TmuxManager, type AttachResult } from './terminal/tmux-manager.js';
 import { AuthService, RateLimiter } from './auth/auth-service.js';
@@ -20,6 +20,22 @@ export interface TermPilotServer {
   close(): Promise<void>;
 }
 
+const MAX_WS_CONNECTIONS = 20;
+const MAX_WS_PAYLOAD = 64 * 1024; // 64KB
+const LOGIN_TIMEOUT_MS = 5000;
+
+function safeSend(ws: WebSocket, data: string): void {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(data);
+  }
+}
+
+function clampDimensions(cols: unknown, rows: unknown): { cols: number; rows: number } {
+  const c = typeof cols === 'number' ? Math.max(1, Math.min(500, Math.round(cols))) : 80;
+  const r = typeof rows === 'number' ? Math.max(1, Math.min(200, Math.round(rows))) : 24;
+  return { cols: c, rows: r };
+}
+
 export async function createServer(opts: ServerOptions): Promise<TermPilotServer> {
   const auth = new AuthService();
   const loginLimiter = new RateLimiter({ maxAttempts: 5, windowMs: 15 * 60 * 1000 });
@@ -30,6 +46,7 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
   });
 
   const tmuxManager = new TmuxManager();
+  let activeConnections = 0;
 
   // Track which sessions belong to which WebSocket (independent mode)
   // Track tmux attach handles per WebSocket (mirror mode)
@@ -37,10 +54,11 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
   const wsMirrorMap = new Map<WebSocket, Map<string, AttachResult>>();
 
   const httpServer = createHttpServer((req: IncomingMessage, res: ServerResponse) => {
-    // CORS and security headers
+    // Security headers
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Content-Security-Policy', "default-src 'self'; connect-src 'self' wss: ws:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:");
 
     if (req.method === 'OPTIONS') {
       res.setHeader('Access-Control-Allow-Origin', '*');
@@ -70,7 +88,14 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
   const wss = new WebSocketServer({
     server: httpServer,
     path: '/ws',
+    maxPayload: MAX_WS_PAYLOAD,
     verifyClient: ({ req }, done) => {
+      // Connection limit
+      if (activeConnections >= MAX_WS_CONNECTIONS) {
+        done(false, 503, 'Too many connections');
+        return;
+      }
+
       const url = new URL(req.url || '/', `http://${req.headers.host}`);
       const token = url.searchParams.get('token');
 
@@ -84,6 +109,7 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
   });
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
+    activeConnections++;
     const url = new URL(req.url || '/', `http://${req.headers.host}`);
     const token = url.searchParams.get('token')!;
     wsSessionMap.set(ws, new Set());
@@ -110,11 +136,13 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
     });
 
     ws.on('close', () => {
+      activeConnections--;
       clearInterval(pingInterval);
-      // Clean up independent sessions owned by this WebSocket
+
+      // Clean up independent sessions
       const sessions = wsSessionMap.get(ws);
       if (sessions) {
-        for (const sid of sessions) {
+        for (const sid of [...sessions]) {
           try {
             ptyManager.destroySession(sid);
           } catch {
@@ -148,6 +176,7 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
         port: actualPort,
         auth,
         close: async () => {
+          auth.dispose();
           ptyManager.destroyAll();
           wss.close();
           await new Promise<void>((r) => httpServer.close(() => r()));
@@ -180,7 +209,7 @@ function handleMessage(
       handleDestroy(ws, msg, ptyManager, wsSessionMap);
       break;
     case 'list':
-      handleList(ws, ptyManager);
+      handleList(ws, ptyManager, wsSessionMap);
       break;
 
     // === Mirror mode (tmux) ===
@@ -215,37 +244,39 @@ function handleCreate(
   wsSessionMap: Map<WebSocket, Set<string>>
 ): void {
   try {
-    const cols = typeof msg.cols === 'number' ? msg.cols : 80;
-    const rows = typeof msg.rows === 'number' ? msg.rows : 24;
+    const { cols, rows } = clampDimensions(msg.cols, msg.rows);
     const session = ptyManager.createSession({ cols, rows });
 
     wsSessionMap.get(ws)?.add(session.id);
 
     // Subscribe to PTY output
-    ptyManager.onData(session.id, (data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: 'output',
-          sessionId: session.id,
-          data,
-        }));
-      }
+    const unsubData = ptyManager.onData(session.id, (data) => {
+      safeSend(ws, JSON.stringify({
+        type: 'output',
+        sessionId: session.id,
+        data,
+      }));
     });
 
-    // Subscribe to PTY exit
-    ptyManager.onExit(session.id, ({ exitCode, signal }) => {
+    // Subscribe to PTY exit — only send if not intentionally destroyed
+    const unsubExit = ptyManager.onExit(session.id, ({ exitCode, signal }) => {
       wsSessionMap.get(ws)?.delete(session.id);
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: 'session_destroyed',
-          sessionId: session.id,
-          exitCode,
-          signal,
-        }));
-      }
+      safeSend(ws, JSON.stringify({
+        type: 'session_destroyed',
+        sessionId: session.id,
+        exitCode,
+        signal,
+      }));
     });
 
-    ws.send(JSON.stringify({
+    // Store unsubscribe functions for cleanup on ws close
+    const origSessions = wsSessionMap.get(ws);
+    if (origSessions) {
+      // Attach cleanup metadata
+      (origSessions as any)[`_unsub_${session.id}`] = () => { unsubData(); unsubExit(); };
+    }
+
+    safeSend(ws, JSON.stringify({
       type: 'session_created',
       sessionId: session.id,
     }));
@@ -291,12 +322,12 @@ function handleResize(
 ): void {
   try {
     const sessionId = msg.sessionId as string;
-    const cols = msg.cols as number;
-    const rows = msg.rows as number;
-    if (!sessionId || typeof cols !== 'number' || typeof rows !== 'number') {
+    if (!sessionId) {
       sendError(ws, 'Invalid resize message');
       return;
     }
+
+    const { cols, rows } = clampDimensions(msg.cols, msg.rows);
 
     // Check if this is a mirror-mode session first
     const mirrors = wsMirrorMap.get(ws);
@@ -327,7 +358,7 @@ function handleDestroy(
     }
     ptyManager.destroySession(sessionId);
     wsSessionMap.get(ws)?.delete(sessionId);
-    ws.send(JSON.stringify({
+    safeSend(ws, JSON.stringify({
       type: 'session_destroyed',
       sessionId,
     }));
@@ -336,15 +367,18 @@ function handleDestroy(
   }
 }
 
-function handleList(ws: WebSocket, ptyManager: PtyManager): void {
-  const sessions = ptyManager.listSessions().map((s) => ({
-    id: s.id,
-    cols: s.cols,
-    rows: s.rows,
-    alive: s.alive,
-    createdAt: s.createdAt,
-  }));
-  ws.send(JSON.stringify({ type: 'session_list', sessions }));
+function handleList(ws: WebSocket, ptyManager: PtyManager, wsSessionMap: Map<WebSocket, Set<string>>): void {
+  const ownedIds = wsSessionMap.get(ws);
+  const sessions = ptyManager.listSessions()
+    .filter((s) => ownedIds?.has(s.id))
+    .map((s) => ({
+      id: s.id,
+      cols: s.cols,
+      rows: s.rows,
+      alive: s.alive,
+      createdAt: s.createdAt,
+    }));
+  safeSend(ws, JSON.stringify({ type: 'session_list', sessions }));
 }
 
 function handleHealth(res: ServerResponse, ptyManager: PtyManager): void {
@@ -370,15 +404,32 @@ async function handleLogin(
     return;
   }
 
-  let body = '';
-  for await (const chunk of req) {
-    body += chunk;
-    if (body.length > 4096) {
-      res.writeHead(413, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Request too large' }));
-      return;
+  // Request timeout to prevent slow-loris
+  const timeout = setTimeout(() => {
+    if (!res.headersSent) {
+      res.writeHead(408, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Request timeout' }));
     }
+    req.destroy();
+  }, LOGIN_TIMEOUT_MS);
+
+  let body = '';
+  try {
+    for await (const chunk of req) {
+      body += chunk;
+      if (body.length > 4096) {
+        clearTimeout(timeout);
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Request too large' }));
+        return;
+      }
+    }
+  } catch {
+    clearTimeout(timeout);
+    return; // Connection was destroyed by timeout
   }
+
+  clearTimeout(timeout);
 
   try {
     const { username, password } = JSON.parse(body);
@@ -402,7 +453,7 @@ async function handleLogin(
 async function handleTmuxList(ws: WebSocket, tmux: TmuxManager): Promise<void> {
   try {
     const sessions = await tmux.listSessions();
-    ws.send(JSON.stringify({ type: 'tmux_sessions', sessions }));
+    safeSend(ws, JSON.stringify({ type: 'tmux_sessions', sessions }));
   } catch (err) {
     sendError(ws, (err as Error).message);
   }
@@ -416,15 +467,12 @@ function handleTmuxAttach(
 ): void {
   try {
     const sessionName = msg.sessionName as string;
-    const cols = typeof msg.cols === 'number' ? msg.cols : 80;
-    const rows = typeof msg.rows === 'number' ? msg.rows : 24;
-
     if (!sessionName) {
       sendError(ws, 'sessionName required for tmux_attach');
       return;
     }
 
-    // Use sessionName as the mirror session ID
+    const { cols, rows } = clampDimensions(msg.cols, msg.rows);
     const mirrorId = `tmux:${sessionName}`;
 
     let mirrors = wsMirrorMap.get(ws);
@@ -433,7 +481,6 @@ function handleTmuxAttach(
       wsMirrorMap.set(ws, mirrors);
     }
 
-    // Don't double-attach
     if (mirrors.has(mirrorId)) {
       sendError(ws, `Already attached to tmux session "${sessionName}"`);
       return;
@@ -441,31 +488,26 @@ function handleTmuxAttach(
 
     const handle = tmux.attachSession(sessionName, { cols, rows });
 
-    // Pipe tmux output to WebSocket
     handle.pty.onData((data: string) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: 'output',
-          sessionId: mirrorId,
-          data,
-        }));
-      }
+      safeSend(ws, JSON.stringify({
+        type: 'output',
+        sessionId: mirrorId,
+        data,
+      }));
     });
 
     handle.pty.onExit(() => {
       mirrors?.delete(mirrorId);
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: 'tmux_detached',
-          sessionId: mirrorId,
-          sessionName,
-        }));
-      }
+      safeSend(ws, JSON.stringify({
+        type: 'tmux_detached',
+        sessionId: mirrorId,
+        sessionName,
+      }));
     });
 
     mirrors.set(mirrorId, handle);
 
-    ws.send(JSON.stringify({
+    safeSend(ws, JSON.stringify({
       type: 'tmux_attached',
       sessionId: mirrorId,
       sessionName,
@@ -493,7 +535,7 @@ function handleTmuxDetach(
   if (handle) {
     handle.cleanup();
     mirrors?.delete(mirrorId);
-    ws.send(JSON.stringify({
+    safeSend(ws, JSON.stringify({
       type: 'tmux_detached',
       sessionId: mirrorId,
       sessionName,
@@ -515,7 +557,7 @@ async function handleTmuxCreate(
       return;
     }
     await tmux.createSession(name);
-    ws.send(JSON.stringify({ type: 'tmux_created', name }));
+    safeSend(ws, JSON.stringify({ type: 'tmux_created', name }));
   } catch (err) {
     sendError(ws, (err as Error).message);
   }
@@ -534,17 +576,18 @@ async function handleTmuxKill(
       return;
     }
 
-    // Detach first if attached
+    // Detach all clients attached to this session
     const mirrorId = `tmux:${name}`;
-    const mirrors = wsMirrorMap.get(ws);
-    const handle = mirrors?.get(mirrorId);
-    if (handle) {
-      handle.cleanup();
-      mirrors?.delete(mirrorId);
+    for (const [, mirrors] of wsMirrorMap) {
+      const handle = mirrors.get(mirrorId);
+      if (handle) {
+        handle.cleanup();
+        mirrors.delete(mirrorId);
+      }
     }
 
     await tmux.killSession(name);
-    ws.send(JSON.stringify({ type: 'tmux_killed', name }));
+    safeSend(ws, JSON.stringify({ type: 'tmux_killed', name }));
   } catch (err) {
     sendError(ws, (err as Error).message);
   }
@@ -562,16 +605,14 @@ async function handleTmuxWindows(
       return;
     }
     const windows = await tmux.getSessionWindows(sessionName);
-    ws.send(JSON.stringify({ type: 'tmux_windows', sessionName, windows }));
+    safeSend(ws, JSON.stringify({ type: 'tmux_windows', sessionName, windows }));
   } catch (err) {
     sendError(ws, (err as Error).message);
   }
 }
 
 function sendError(ws: WebSocket, message: string, sessionId?: string): void {
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'error', message, sessionId }));
-  }
+  safeSend(ws, JSON.stringify({ type: 'error', message, sessionId }));
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -587,42 +628,53 @@ const MIME_TYPES: Record<string, string> = {
 };
 
 // Resolve client dist directory (relative to server package)
-const CLIENT_DIST = join(new URL('.', import.meta.url).pathname, '..', '..', 'client', 'dist');
+const CLIENT_DIST = resolve(new URL('.', import.meta.url).pathname, '..', '..', 'client', 'dist');
+const CLIENT_DIST_PREFIX = CLIENT_DIST + '/';
 
-function serveStatic(req: IncomingMessage, res: ServerResponse): void {
+async function serveStatic(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url || '/', `http://${req.headers.host}`);
-  let filePath = join(CLIENT_DIST, url.pathname === '/' ? 'index.html' : url.pathname);
+  let filePath = resolve(CLIENT_DIST, '.' + (url.pathname === '/' ? '/index.html' : url.pathname));
 
-  // Prevent path traversal
-  if (!filePath.startsWith(CLIENT_DIST)) {
-    res.writeHead(403);
-    res.end('Forbidden');
-    return;
+  // Prevent path traversal (resolve + prefix check)
+  if (!filePath.startsWith(CLIENT_DIST_PREFIX) && filePath !== CLIENT_DIST + '/index.html') {
+    // Re-check with the resolved path
+    if (!filePath.startsWith(CLIENT_DIST)) {
+      res.writeHead(403);
+      res.end('Forbidden');
+      return;
+    }
   }
 
   // Try the exact file, then fallback to index.html (SPA routing)
-  if (!existsSync(filePath)) {
+  try {
+    await access(filePath);
+  } catch {
     filePath = join(CLIENT_DIST, 'index.html');
-  }
-
-  if (!existsSync(filePath)) {
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Not found. Build the client first: pnpm --filter @termpilot/client build' }));
-    return;
+    try {
+      await access(filePath);
+    } catch {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Not found. Build the client first: pnpm --filter @termpilot/client build' }));
+      return;
+    }
   }
 
   const ext = extname(filePath);
   const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-  const content = readFileSync(filePath);
 
-  // Cache static assets (hashed filenames)
-  const cacheControl = ext === '.html' || ext === '.webmanifest'
-    ? 'no-cache'
-    : 'public, max-age=31536000, immutable';
+  try {
+    const content = await readFile(filePath);
+    const cacheControl = ext === '.html' || ext === '.webmanifest'
+      ? 'no-cache'
+      : 'public, max-age=31536000, immutable';
 
-  res.writeHead(200, {
-    'Content-Type': contentType,
-    'Cache-Control': cacheControl,
-  });
-  res.end(content);
+    res.writeHead(200, {
+      'Content-Type': contentType,
+      'Cache-Control': cacheControl,
+    });
+    res.end(content);
+  } catch {
+    res.writeHead(500);
+    res.end('Internal server error');
+  }
 }

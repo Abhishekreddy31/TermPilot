@@ -59,7 +59,12 @@ export function ExtraKeys({ onKey, onScrollUp, onScrollDown }: ExtraKeysProps) {
       if (ctrlActive && data.length === 1) {
         const code = data.toUpperCase().charCodeAt(0);
         if (code >= 65 && code <= 90) {
+          // Ctrl+A=0x01 ... Ctrl+Z=0x1A
           data = String.fromCharCode(code - 64);
+        } else {
+          // Ctrl+[ = Escape, Ctrl+] = 0x1D, Ctrl+\ = 0x1C, Ctrl+^ = 0x1E
+          const special: Record<string, string> = { '[': '\x1b', ']': '\x1d', '\\': '\x1c', '^': '\x1e', '/': '\x1f' };
+          if (special[data]) data = special[data];
         }
         setCtrlActive(false);
       }

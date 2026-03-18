@@ -23,13 +23,8 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
-        runtimeCaching: [
-          {
-            urlPattern: /^https?:\/\/.*\/api\//,
-            handler: 'NetworkFirst',
-            options: { cacheName: 'api-cache', expiration: { maxEntries: 10 } },
-          },
-        ],
+        runtimeCaching: [],
+        navigateFallback: 'index.html',
       },
     }),
   ],

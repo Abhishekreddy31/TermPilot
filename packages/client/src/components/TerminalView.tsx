@@ -10,6 +10,7 @@ interface Session {
   id: string;
   label: string;
   mode: Mode;
+  tmuxName?: string;
 }
 
 interface TmuxSession {
@@ -30,17 +31,28 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
   const [mode, setMode] = useState<Mode>('independent');
   const [tmuxSessions, setTmuxSessions] = useState<TmuxSession[]>([]);
   const [showTmuxPicker, setShowTmuxPicker] = useState(false);
-  const termRef = useRef<{ sendInput: (data: string) => void } | null>(null);
+  const termRef = useRef<{ sendInput: (data: string) => void; scrollUp: () => void; scrollDown: () => void } | null>(null);
   const sessionCounter = useRef(0);
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
 
   useEffect(() => {
-    const unsub = wsClient.onStateChange(setConnState);
+    const unsub = wsClient.onStateChange((state) => {
+      setConnState(state);
+      // On reconnect, clear stale sessions and create fresh one
+      if (state === 'connected') {
+        setSessions([]);
+        setActiveSessionId(null);
+        sessionCounter.current = 0;
+        wsClient.send({ type: 'create', cols: 80, rows: 24 });
+      }
+    });
     return unsub;
   }, [wsClient]);
 
+  // Message handler — no sessions dependency to avoid listener churn
   useEffect(() => {
     const unsub = wsClient.onMessage((msg: WsMessage) => {
-      // Independent mode responses
       if (msg.type === 'session_created') {
         const id = msg.sessionId as string;
         sessionCounter.current++;
@@ -55,16 +67,14 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
         const id = msg.sessionId as string;
         setSessions((prev) => {
           const next = prev.filter((s) => s.id !== id);
+          // Fix active session using the filtered list, not stale closure
+          setActiveSessionId((prevActive) =>
+            prevActive === id ? (next[0]?.id ?? null) : prevActive
+          );
           return next;
         });
-        setActiveSessionId((prev) =>
-          prev === id
-            ? sessions.find((s) => s.id !== id)?.id ?? null
-            : prev
-        );
       }
 
-      // Mirror mode responses
       if (msg.type === 'tmux_sessions') {
         setTmuxSessions(msg.sessions as TmuxSession[]);
       }
@@ -74,7 +84,7 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
         const name = msg.sessionName as string;
         setSessions((prev) => [
           ...prev,
-          { id, label: `[tmux] ${name}`, mode: 'mirror' },
+          { id, label: `[tmux] ${name}`, mode: 'mirror', tmuxName: name },
         ]);
         setActiveSessionId(id);
         setShowTmuxPicker(false);
@@ -82,25 +92,21 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
 
       if (msg.type === 'tmux_detached') {
         const id = msg.sessionId as string;
-        setSessions((prev) => prev.filter((s) => s.id !== id));
-        setActiveSessionId((prev) =>
-          prev === id
-            ? sessions.find((s) => s.id !== id)?.id ?? null
-            : prev
-        );
+        setSessions((prev) => {
+          const next = prev.filter((s) => s.id !== id);
+          setActiveSessionId((prevActive) =>
+            prevActive === id ? (next[0]?.id ?? null) : prevActive
+          );
+          return next;
+        });
       }
 
-      if (msg.type === 'tmux_created') {
-        // Refresh session list
-        wsClient.send({ type: 'tmux_list' });
-      }
-
-      if (msg.type === 'tmux_killed') {
+      if (msg.type === 'tmux_created' || msg.type === 'tmux_killed') {
         wsClient.send({ type: 'tmux_list' });
       }
     });
     return unsub;
-  }, [wsClient, sessions]);
+  }, [wsClient]);
 
   const createSession = useCallback(() => {
     wsClient.send({ type: 'create', cols: 80, rows: 24 });
@@ -108,9 +114,8 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
 
   const destroySession = useCallback(
     (session: Session) => {
-      if (session.mode === 'mirror') {
-        const name = session.label.replace('[tmux] ', '');
-        wsClient.send({ type: 'tmux_detach', sessionName: name });
+      if (session.mode === 'mirror' && session.tmuxName) {
+        wsClient.send({ type: 'tmux_detach', sessionName: session.tmuxName });
       } else {
         wsClient.send({ type: 'destroy', sessionId: session.id });
       }
@@ -150,23 +155,16 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
 
   const attachTmux = useCallback(
     (name: string) => {
-      // Check if already attached
-      if (sessions.some((s) => s.id === `tmux:${name}`)) {
+      const current = sessionsRef.current;
+      if (current.some((s) => s.id === `tmux:${name}`)) {
         setActiveSessionId(`tmux:${name}`);
         setShowTmuxPicker(false);
         return;
       }
       wsClient.send({ type: 'tmux_attach', sessionName: name, cols: 80, rows: 24 });
     },
-    [wsClient, sessions]
+    [wsClient]
   );
-
-  // Create first session on connect (independent mode only)
-  useEffect(() => {
-    if (connState === 'connected' && sessions.length === 0 && mode === 'independent') {
-      createSession();
-    }
-  }, [connState, sessions.length, createSession, mode]);
 
   const statusClass =
     connState === 'connected'
@@ -202,6 +200,21 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
           </button>
         </div>
       </div>
+
+      {/* Disconnect banner */}
+      {connState !== 'connected' && (
+        <div style={{
+          padding: '8px 16px',
+          background: connState === 'connecting' ? '#2d2a1b' : '#2d1b1b',
+          color: connState === 'connecting' ? '#d29922' : '#f85149',
+          fontSize: '13px',
+          textAlign: 'center',
+          flexShrink: 0,
+          borderBottom: '1px solid var(--border-default)',
+        }}>
+          {connState === 'connecting' ? 'Reconnecting...' : 'Disconnected from server'}
+        </div>
+      )}
 
       {/* Tmux session picker overlay */}
       {showTmuxPicker && (

@@ -20,11 +20,16 @@ function sendJson(ws: WebSocket, msg: Record<string, unknown>): void {
   ws.send(JSON.stringify(msg));
 }
 
-function waitForMessage(ws: WebSocket): Promise<Record<string, unknown>> {
+function waitForMessage(ws: WebSocket, filter?: (msg: Record<string, unknown>) => boolean): Promise<Record<string, unknown>> {
   return new Promise((resolve) => {
-    ws.once('message', (data) => {
-      resolve(JSON.parse(data.toString()));
-    });
+    const handler = (data: Buffer) => {
+      const msg = JSON.parse(data.toString());
+      if (!filter || filter(msg)) {
+        ws.removeListener('message', handler);
+        resolve(msg);
+      }
+    };
+    ws.on('message', handler);
   });
 }
 
@@ -146,7 +151,7 @@ describe('WebSocket Server Integration', () => {
       const createResp = await createPromise;
       const sessionId = createResp.sessionId as string;
 
-      const destroyPromise = waitForMessage(ws);
+      const destroyPromise = waitForMessage(ws, (m) => m.type === 'session_destroyed');
       sendJson(ws, { type: 'destroy', sessionId });
       const destroyResp = await destroyPromise;
       expect(destroyResp.type).toBe('session_destroyed');

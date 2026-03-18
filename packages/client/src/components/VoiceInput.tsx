@@ -8,6 +8,7 @@ interface VoiceInputProps {
 
 export function VoiceInput({ onCommand }: VoiceInputProps) {
   const voiceRef = useRef<VoiceService | null>(null);
+  const [available, setAvailable] = useState(false);
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
   const [interimText, setInterimText] = useState('');
   const [finalText, setFinalText] = useState('');
@@ -15,9 +16,10 @@ export function VoiceInput({ onCommand }: VoiceInputProps) {
   useEffect(() => {
     const voice = new VoiceService();
     voiceRef.current = voice;
+    setAvailable(voice.available);
 
-    voice.onStateChange(setVoiceState);
-    voice.onResult((result) => {
+    const unsubState = voice.onStateChange(setVoiceState);
+    const unsubResult = voice.onResult((result) => {
       if (result.isFinal) {
         const processed = postProcessTranscript(result.transcript);
         setFinalText(processed);
@@ -28,17 +30,22 @@ export function VoiceInput({ onCommand }: VoiceInputProps) {
     });
 
     return () => {
+      unsubState();
+      unsubResult();
       voice.stop();
     };
   }, []);
 
   const toggleVoice = useCallback(() => {
-    voiceRef.current?.toggle();
-    if (voiceState === 'idle') {
+    const voice = voiceRef.current;
+    if (!voice) return;
+    voice.toggle();
+    // Use service state, not React state (avoids stale closure)
+    if (voice.state === 'listening') {
       setFinalText('');
       setInterimText('');
     }
-  }, [voiceState]);
+  }, []);
 
   const sendCommand = useCallback(() => {
     if (finalText) {
@@ -52,8 +59,8 @@ export function VoiceInput({ onCommand }: VoiceInputProps) {
     setInterimText('');
   }, []);
 
-  if (!voiceRef.current?.available) {
-    return null; // Hide voice UI if not available
+  if (!available) {
+    return null;
   }
 
   return (

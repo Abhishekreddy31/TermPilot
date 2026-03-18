@@ -1,4 +1,7 @@
-import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
+
+const scryptAsync = promisify(scrypt);
 
 export interface AuthResult {
   success: boolean;
@@ -37,10 +40,21 @@ export class AuthService {
   private sessions = new Map<string, InternalSession>();
   private idleTimeoutMs: number;
   private absoluteTimeoutMs: number;
+  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(opts?: AuthServiceOptions) {
     this.idleTimeoutMs = opts?.idleTimeoutMs ?? 30 * 60 * 1000; // 30 min
     this.absoluteTimeoutMs = opts?.absoluteTimeoutMs ?? 8 * 60 * 60 * 1000; // 8 hours
+
+    // Periodically clean expired sessions
+    this.cleanupTimer = setInterval(() => this.cleanExpiredSessions(), 5 * 60 * 1000);
+  }
+
+  dispose(): void {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
   }
 
   async createUser(username: string, password: string): Promise<void> {
@@ -49,7 +63,7 @@ export class AuthService {
     }
 
     const salt = randomBytes(32).toString('hex');
-    const hash = this.hashPassword(password, salt);
+    const hash = await this.hashPassword(password, salt);
 
     this.users.set(username, {
       username,
@@ -62,11 +76,11 @@ export class AuthService {
     const user = this.users.get(username);
     if (!user) {
       // Constant-time: hash anyway to prevent timing attacks
-      this.hashPassword(password, randomBytes(32).toString('hex'));
+      await this.hashPassword(password, randomBytes(32).toString('hex'));
       return { success: false, error: 'Invalid credentials' };
     }
 
-    const hash = this.hashPassword(password, user.salt);
+    const hash = await this.hashPassword(password, user.salt);
     const hashBuffer = Buffer.from(hash, 'hex');
     const storedBuffer = Buffer.from(user.passwordHash, 'hex');
 
@@ -132,12 +146,13 @@ export class AuthService {
     return this.users.size > 0;
   }
 
-  private hashPassword(password: string, salt: string): string {
-    return scryptSync(password, salt, SCRYPT_KEYLEN, {
+  private async hashPassword(password: string, salt: string): Promise<string> {
+    const buf = (await scryptAsync(password, salt, SCRYPT_KEYLEN, {
       N: SCRYPT_COST,
       r: SCRYPT_BLOCK_SIZE,
       p: SCRYPT_PARALLELISM,
-    }).toString('hex');
+    })) as Buffer;
+    return buf.toString('hex');
   }
 }
 
@@ -169,6 +184,21 @@ export class RateLimiter {
     }
 
     entry.count++;
+
+    // Clean expired entries opportunistically
+    if (this.entries.size > 1000) {
+      this.cleanExpired();
+    }
+
     return entry.count <= this.opts.maxAttempts;
+  }
+
+  private cleanExpired(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.entries) {
+      if (now >= entry.resetAt) {
+        this.entries.delete(key);
+      }
+    }
   }
 }

@@ -1,11 +1,16 @@
 const API_BASE = '';
 
 export async function login(username: string, password: string): Promise<string> {
-  const res = await fetch(`${API_BASE}/api/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+  } catch {
+    throw new Error('Cannot reach server. Check your connection.');
+  }
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));

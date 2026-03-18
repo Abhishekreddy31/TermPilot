@@ -22,6 +22,16 @@ export interface AttachResult {
   cleanup: () => void;
 }
 
+const VALID_SESSION_NAME = /^[a-zA-Z0-9_-]+$/;
+
+function validateSessionName(name: string): void {
+  if (!name || !VALID_SESSION_NAME.test(name)) {
+    throw new Error(
+      `Invalid session name: "${name}". Use only alphanumeric, dash, underscore.`
+    );
+  }
+}
+
 export class TmuxManager {
   /**
    * List all active tmux sessions on this machine.
@@ -65,12 +75,7 @@ export class TmuxManager {
    * Create a new detached tmux session.
    */
   async createSession(name: string): Promise<void> {
-    // Validate session name (alphanumeric, dash, underscore only)
-    if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
-      throw new Error(
-        `Invalid session name: "${name}". Use only alphanumeric, dash, underscore.`
-      );
-    }
+    validateSessionName(name);
 
     try {
       await exec('tmux', ['new-session', '-d', '-s', name]);
@@ -87,6 +92,7 @@ export class TmuxManager {
    * Kill a tmux session.
    */
   async killSession(name: string): Promise<void> {
+    validateSessionName(name);
     try {
       await exec('tmux', ['kill-session', '-t', name]);
     } catch (err) {
@@ -105,6 +111,7 @@ export class TmuxManager {
    * List windows in a tmux session.
    */
   async getSessionWindows(sessionName: string): Promise<TmuxWindow[]> {
+    validateSessionName(sessionName);
     try {
       const { stdout } = await exec('tmux', [
         'list-windows',
@@ -140,6 +147,7 @@ export class TmuxManager {
     sessionName: string,
     options: { cols: number; rows: number }
   ): AttachResult {
+    validateSessionName(sessionName);
     const ptyProcess = pty.spawn(
       'tmux',
       ['attach-session', '-t', sessionName],

@@ -139,7 +139,8 @@ export class PtyManager {
   }
 
   destroyAll(): void {
-    for (const [id] of this.sessions) {
+    const ids = [...this.sessions.keys()];
+    for (const id of ids) {
       try {
         this.destroySession(id);
       } catch {

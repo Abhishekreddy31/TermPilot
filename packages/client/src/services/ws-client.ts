@@ -8,6 +8,8 @@ export interface WsMessage {
 type MessageHandler = (msg: WsMessage) => void;
 type StateHandler = (state: ConnectionState) => void;
 
+const MAX_RECONNECT_ATTEMPTS = 30;
+
 export class WsClient {
   private ws: WebSocket | null = null;
   private token: string;
@@ -15,6 +17,7 @@ export class WsClient {
   private stateHandlers: StateHandler[] = [];
   private reconnectDelay = 1000;
   private maxReconnectDelay = 30000;
+  private reconnectAttempts = 0;
   private shouldReconnect = true;
   private _state: ConnectionState = 'disconnected';
 
@@ -28,6 +31,7 @@ export class WsClient {
 
   connect(): void {
     this.shouldReconnect = true;
+    this.reconnectAttempts = 0;
     this.doConnect();
   }
 
@@ -40,10 +44,12 @@ export class WsClient {
     this.setState('disconnected');
   }
 
-  send(msg: WsMessage): void {
+  send(msg: WsMessage): boolean {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(msg));
+      return true;
     }
+    return false;
   }
 
   onMessage(handler: MessageHandler): () => void {
@@ -74,6 +80,7 @@ export class WsClient {
     this.ws.onopen = () => {
       this.setState('connected');
       this.reconnectDelay = 1000;
+      this.reconnectAttempts = 0;
     };
 
     this.ws.onmessage = (event) => {
@@ -91,7 +98,8 @@ export class WsClient {
       this.ws = null;
       this.setState('disconnected');
 
-      if (this.shouldReconnect) {
+      if (this.shouldReconnect && this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+        this.reconnectAttempts++;
         setTimeout(() => this.doConnect(), this.reconnectDelay);
         this.reconnectDelay = Math.min(
           this.reconnectDelay * 2,
@@ -107,6 +115,7 @@ export class WsClient {
 
   private setState(state: ConnectionState): void {
     if (this._state === state) return;
+    const prevState = this._state;
     this._state = state;
     for (const handler of this.stateHandlers) {
       handler(state);
