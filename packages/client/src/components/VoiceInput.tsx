@@ -83,6 +83,7 @@ export function VoiceInput({ onCommand }: VoiceInputProps) {
         <button
           class={`voice-btn ${voiceState === 'listening' ? 'listening' : ''}`}
           onClick={toggleVoice}
+          aria-label={voiceState === 'listening' ? 'Stop voice recognition' : 'Start voice command'}
         >
           {voiceState === 'listening' ? 'Stop' : 'Voice'}
         </button>

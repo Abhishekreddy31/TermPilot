@@ -3,8 +3,12 @@
 import { createServer } from '../app.js';
 import { TunnelManager } from '../tunnel/tunnel-manager.js';
 import { randomBytes } from 'node:crypto';
-import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+
+// Injected by esbuild at build time; falls back for dev mode
+declare const TERMPILOT_VERSION: string | undefined;
+const VERSION = typeof TERMPILOT_VERSION !== 'undefined' ? TERMPILOT_VERSION : '1.0.0-dev';
 
 const args = process.argv.slice(2);
 
@@ -32,12 +36,7 @@ Environment variables:
 }
 
 if (args.includes('--version') || args.includes('-v')) {
-  try {
-    const pkg = JSON.parse(readFileSync(join(new URL('.', import.meta.url).pathname, '..', '..', '..', 'package.json'), 'utf8'));
-    console.log(`termpilot v${pkg.version}`);
-  } catch {
-    console.log('termpilot (version unknown)');
-  }
+  console.log(`termpilot v${VERSION}`);
   process.exit(0);
 }
 
@@ -122,6 +121,12 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('Failed to start server:', err);
+  // User-friendly port-in-use message
+  if (err?.code === 'EADDRINUSE') {
+    console.error(`Error: Port ${PORT} is already in use.`);
+    console.error(`Try: termpilot --port ${PORT + 1}`);
+  } else {
+    console.error('Failed to start server:', err);
+  }
   process.exit(1);
 });

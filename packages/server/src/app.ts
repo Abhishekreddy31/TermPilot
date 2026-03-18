@@ -7,8 +7,10 @@ import { randomBytes } from 'node:crypto';
 import { PtyManager } from './terminal/pty-manager.js';
 import { TmuxManager, type AttachResult } from './terminal/tmux-manager.js';
 import { AuthService, RateLimiter } from './auth/auth-service.js';
-import { CreateSessionSchema, InputSchema, ResizeSchema, DestroySessionSchema } from '@termpilot/shared';
-import type { ZodError } from 'zod';
+import {
+  CreateSessionSchema, InputSchema, ResizeSchema, DestroySessionSchema,
+  TmuxAttachSchema, TmuxDetachSchema, TmuxCreateSchema, TmuxKillSchema, TmuxWindowsSchema,
+} from '@termpilot/shared';
 
 export interface ServerOptions {
   port: number;
@@ -34,11 +36,6 @@ function safeSend(ws: WebSocket, data: string): void {
   }
 }
 
-function clampDimensions(cols: unknown, rows: unknown): { cols: number; rows: number } {
-  const c = typeof cols === 'number' ? Math.max(1, Math.min(500, Math.round(cols))) : 80;
-  const r = typeof rows === 'number' ? Math.max(1, Math.min(200, Math.round(rows))) : 24;
-  return { cols: c, rows: r };
-}
 
 export async function createServer(opts: ServerOptions): Promise<TermPilotServer> {
   const auth = new AuthService();
@@ -232,7 +229,9 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
       wsTokenMap.delete(ws);
     });
 
-    ws.on('error', () => {});
+    ws.on('error', (err) => {
+      console.error(`[ws] Connection error from ${clientIp}:`, err.message);
+    });
   });
 
   return new Promise<TermPilotServer>((resolve) => {
@@ -244,11 +243,10 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
       registerOrigin(`http://localhost:${actualPort}`);
       registerOrigin(`http://127.0.0.1:${actualPort}`);
       registerOrigin(`http://${serverHost}:${actualPort}`);
-      // For LAN access
+      // When binding to all interfaces (tunnel mode), also allow LAN IPs
+      // The tunnel URL origin will match via same-origin (no Origin header sent)
       if (serverHost === '0.0.0.0') {
-        // Accept any origin when binding to all interfaces (tunnel mode)
-        // The allowlist is relaxed here because the tunnel URL is unknown at startup
-        registerOrigin('*');
+        registerOrigin(`http://0.0.0.0:${actualPort}`);
       }
 
       resolve({
@@ -296,7 +294,7 @@ function handleMessage(
   }
 }
 
-function formatZodError(err: ZodError): string {
+function formatZodError(err: { issues: Array<{ path: (string | number)[]; message: string }> }): string {
   return err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ');
 }
 
@@ -468,20 +466,36 @@ async function handleLogin(
   }
 }
 
-// #2: Logout endpoint validates token ownership before invalidating
 async function handleLogout(
   req: IncomingMessage, res: ServerResponse, auth: AuthService
 ): Promise<void> {
+  const timeout = setTimeout(() => {
+    if (!res.headersSent) {
+      res.writeHead(408, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Request timeout' }));
+    }
+    req.destroy();
+  }, LOGIN_TIMEOUT_MS);
+
   let body = '';
   try {
     for await (const chunk of req) {
       body += chunk;
       if (body.length > 4096) {
+        clearTimeout(timeout);
         res.writeHead(413, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Request too large' }));
         return;
       }
     }
+  } catch {
+    clearTimeout(timeout);
+    return;
+  }
+
+  clearTimeout(timeout);
+
+  try {
     const { token } = JSON.parse(body);
     if (!token || typeof token !== 'string') {
       res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -518,9 +532,9 @@ function handleTmuxAttach(
   wsMirrorMap: Map<WebSocket, Map<string, AttachResult>>
 ): void {
   try {
-    const sessionName = msg.sessionName as string;
-    if (!sessionName) { sendError(ws, 'sessionName required'); return; }
-    const { cols, rows } = clampDimensions(msg.cols, msg.rows);
+    const parsed = TmuxAttachSchema.safeParse(msg);
+    if (!parsed.success) { sendError(ws, `Invalid tmux_attach: ${formatZodError(parsed.error)}`); return; }
+    const { sessionName, cols, rows } = parsed.data;
     const mirrorId = `tmux:${sessionName}`;
 
     let mirrors = wsMirrorMap.get(ws);
@@ -547,8 +561,9 @@ function handleTmuxDetach(
   ws: WebSocket, msg: Record<string, unknown>,
   wsMirrorMap: Map<WebSocket, Map<string, AttachResult>>
 ): void {
-  const sessionName = msg.sessionName as string;
-  if (!sessionName) { sendError(ws, 'sessionName required'); return; }
+  const parsed = TmuxDetachSchema.safeParse(msg);
+  if (!parsed.success) { sendError(ws, `Invalid tmux_detach: ${formatZodError(parsed.error)}`); return; }
+  const { sessionName } = parsed.data;
   const mirrorId = `tmux:${sessionName}`;
   const mirrors = wsMirrorMap.get(ws);
   const handle = mirrors?.get(mirrorId);
@@ -562,8 +577,9 @@ function handleTmuxDetach(
 
 async function handleTmuxCreate(ws: WebSocket, msg: Record<string, unknown>, tmux: TmuxManager): Promise<void> {
   try {
-    const name = msg.name as string;
-    if (!name) { sendError(ws, 'name required'); return; }
+    const parsed = TmuxCreateSchema.safeParse(msg);
+    if (!parsed.success) { sendError(ws, `Invalid tmux_create: ${formatZodError(parsed.error)}`); return; }
+    const { name } = parsed.data;
     await tmux.createSession(name);
     safeSend(ws, JSON.stringify({ type: 'tmux_created', name }));
   } catch (err) { sendError(ws, (err as Error).message); }
@@ -575,8 +591,9 @@ async function handleTmuxKill(
   wsMirrorMap: Map<WebSocket, Map<string, AttachResult>>
 ): Promise<void> {
   try {
-    const name = msg.name as string;
-    if (!name) { sendError(ws, 'name required'); return; }
+    const parsed = TmuxKillSchema.safeParse(msg);
+    if (!parsed.success) { sendError(ws, `Invalid tmux_kill: ${formatZodError(parsed.error)}`); return; }
+    const { name } = parsed.data;
     const mirrorId = `tmux:${name}`;
 
     // Clean up all attached clients
@@ -591,8 +608,9 @@ async function handleTmuxKill(
 
 async function handleTmuxWindows(ws: WebSocket, msg: Record<string, unknown>, tmux: TmuxManager): Promise<void> {
   try {
-    const sessionName = msg.sessionName as string;
-    if (!sessionName) { sendError(ws, 'sessionName required'); return; }
+    const parsed = TmuxWindowsSchema.safeParse(msg);
+    if (!parsed.success) { sendError(ws, `Invalid tmux_windows: ${formatZodError(parsed.error)}`); return; }
+    const { sessionName } = parsed.data;
     const windows = await tmux.getSessionWindows(sessionName);
     safeSend(ws, JSON.stringify({ type: 'tmux_windows', sessionName, windows }));
   } catch (err) { sendError(ws, (err as Error).message); }
@@ -608,7 +626,22 @@ const MIME_TYPES: Record<string, string> = {
   '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.webmanifest': 'application/manifest+json',
 };
 
-const CLIENT_DIST = resolve(new URL('.', import.meta.url).pathname, '..', '..', 'client', 'dist');
+// Resolve client dist — works in both monorepo dev and published npm layout
+function resolveClientDist(): string {
+  const thisDir = new URL('.', import.meta.url).pathname;
+  // Published layout: dist/cli.js → dist/client/
+  const publishedPath = resolve(thisDir, 'client');
+  // Dev layout: packages/server/src/ → packages/client/dist/
+  const devPath = resolve(thisDir, '..', '..', 'client', 'dist');
+
+  try {
+    const { statSync } = require('node:fs');
+    if (statSync(join(publishedPath, 'index.html'))) return publishedPath;
+  } catch {}
+  return devPath;
+}
+
+const CLIENT_DIST = resolveClientDist();
 const CLIENT_DIST_PREFIX = CLIENT_DIST + '/';
 
 async function serveStatic(req: IncomingMessage, res: ServerResponse): Promise<void> {

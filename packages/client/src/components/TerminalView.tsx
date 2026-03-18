@@ -257,7 +257,7 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
         </div>
       )}
 
-      <div class="session-tabs">
+      <div class="session-tabs" role="tablist" aria-label="Terminal sessions">
         {sessions.map((s) => (
           <button
             key={s.id}
