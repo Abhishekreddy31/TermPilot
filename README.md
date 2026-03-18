@@ -27,8 +27,20 @@
   <a href="#how-it-works">How It Works</a> •
   <a href="#architecture">Architecture</a> •
   <a href="#security">Security</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#why-termpilot">Why TermPilot?</a> •
   <a href="#contributing">Contributing</a>
 </p>
+
+<!--
+  TODO: Add a demo GIF here for maximum visual impact.
+  Record with: iPhone screen record → convert to GIF
+  Show: login → type a command → voice command → switch tabs → mirror mode
+  Place the GIF with:
+  <p align="center">
+    <img src="docs/demo.gif" width="360" alt="TermPilot demo">
+  </p>
+-->
 
 ---
 
@@ -318,6 +330,28 @@ pnpm test:coverage # With coverage
 
 ---
 
+## Why TermPilot?
+
+There are other tools in this space. Here's how TermPilot compares:
+
+| Feature | TermPilot | ttyd | gotty | wetty | code-server |
+|---------|:---------:|:----:|:-----:|:-----:|:-----------:|
+| Multi-session tabs | Yes | No | No | No | Yes |
+| Voice commands | Yes | No | No | No | No |
+| Mirror existing terminals (tmux) | Yes | No | No | No | No |
+| Mobile-optimized UI | Yes | No | No | No | Partial |
+| Extra keys toolbar | Yes | No | No | No | No |
+| Remote access (free) | Yes | Manual | Manual | Manual | Manual |
+| Touch scrolling | Yes | No | No | No | Partial |
+| PWA installable | Yes | No | No | No | Yes |
+| Zero cost | Yes | Yes | Yes | Yes | Yes |
+| Single command install | `npx termpilot` | Build from source | Archived | npm | npm |
+| Windows support | Full + WSL | Linux only | Linux/macOS | Linux | Linux/macOS |
+
+**TermPilot is the only tool that combines** multi-session management, voice commands, tmux mirroring, and a mobile-first PWA — all installable with a single command and zero cost.
+
+---
+
 ## Contributing
 
 Contributions are welcome. Please:
@@ -338,6 +372,21 @@ pnpm dev:client   # Client only (Vite HMR)
 pnpm test         # Run all tests
 pnpm run build    # Build all packages
 ```
+
+---
+
+---
+
+<p align="center">
+  <strong>If TermPilot is useful to you, consider giving it a star.</strong><br>
+  It helps others discover the project.
+</p>
+
+<p align="center">
+  <a href="https://github.com/Abhishekreddy31/TermPilot">
+    <img src="https://img.shields.io/github/stars/Abhishekreddy31/TermPilot?style=social" alt="GitHub stars">
+  </a>
+</p>
 
 ---
 
