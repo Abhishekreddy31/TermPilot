@@ -66,7 +66,7 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; connect-src 'self' wss: ws:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; connect-src 'self' wss: ws:; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:");
 
     // CORS: only allow same-origin requests (not wildcard)
     if (origin) {
