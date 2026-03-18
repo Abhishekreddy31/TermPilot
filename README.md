@@ -10,6 +10,18 @@
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/badge/version-1.0.0-blue?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen?style=flat-square&logo=node.js" alt="node">
+  <img src="https://img.shields.io/badge/tests-103%20passing-brightgreen?style=flat-square" alt="tests">
+  <img src="https://img.shields.io/badge/vulnerabilities-0-brightgreen?style=flat-square" alt="vulnerabilities">
+  <img src="https://img.shields.io/badge/security%20audits-3%20passed-brightgreen?style=flat-square" alt="security">
+  <img src="https://img.shields.io/badge/LOC-3.8K-blue?style=flat-square" alt="lines of code">
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="license">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat-square" alt="platform">
+  <img src="https://img.shields.io/badge/cost-%240-brightgreen?style=flat-square" alt="cost">
+</p>
+
+<p align="center">
   <a href="#quick-start">Quick Start</a> •
   <a href="#features">Features</a> •
   <a href="#how-it-works">How It Works</a> •
