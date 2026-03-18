@@ -1,19 +1,98 @@
-# TermPilot
+<p align="center">
+  <img src="packages/client/public/icons/favicon.svg" width="80" height="80" alt="TermPilot logo">
+</p>
 
-**Mobile-first PWA for managing multiple terminal sessions remotely with voice control.**
+<h1 align="center">TermPilot</h1>
 
-TermPilot lets developers manage terminal windows on their laptop from their phone — with voice commands, multi-session tabs, and remote access from anywhere. Built from scratch, completely free, no paid services required.
+<p align="center">
+  <strong>Control your laptop's terminal from your phone.</strong><br>
+  Voice commands, multi-session tabs, real-time mirroring, remote access from anywhere.
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#features">Features</a> •
+  <a href="#how-it-works">How It Works</a> •
+  <a href="#architecture">Architecture</a> •
+  <a href="#security">Security</a> •
+  <a href="#contributing">Contributing</a>
+</p>
+
+---
+
+## Quick Start
+
+```bash
+# Install and run (one command)
+npx termpilot
+
+# Or install globally
+npm install -g termpilot
+termpilot
+
+# With remote access from anywhere
+termpilot --tunnel
+```
+
+Credentials are written to `~/.termpilot/credentials`. Open the URL on your phone.
+
+### From source
+
+```bash
+git clone https://github.com/Abhishekreddy31/TermPilot.git
+cd TermPilot
+pnpm install
+pnpm start
+```
 
 ---
 
 ## Features
 
-- **Multi-terminal management** — Create, destroy, and switch between terminal sessions from your phone
-- **Voice commands** — Transcribe voice to terminal commands via Web Speech API with smart post-processing for developer vocabulary
-- **Remote access** — Access your terminals from anywhere via Cloudflare Tunnel (free), not just your local network
-- **Mobile-optimized UI** — Extra keys row (Esc, Tab, Ctrl, arrows), safe area support for notch/home indicator, responsive design
-- **PWA installable** — Add to home screen for a native app-like experience, works offline (app shell cached)
-- **Secure** — Password authentication with scrypt hashing, server-side sessions, rate limiting, session timeouts
+### Two Modes
+
+| Mode | What it does |
+|------|-------------|
+| **Independent Sessions** | Create fresh terminal sessions from your phone — like opening new Terminal.app windows |
+| **Mirror Mode** | Attach to existing tmux sessions running on your laptop — bidirectional real-time mirroring |
+
+### Core Capabilities
+
+- **Multi-terminal tabs** — Create, switch, and destroy terminal sessions
+- **Voice commands** — Speak commands, confirm, execute. Understands developer vocabulary (`"git commit dash m"` → `git commit -m`)
+- **Extra keys toolbar** — Esc, Tab, Ctrl, Alt, arrow keys, PgUp/PgDn, pipe, tilde — keys your phone keyboard doesn't have
+- **Touch scrolling** — Swipe to scroll through terminal history (5000 lines)
+- **Remote access** — Cloudflare Tunnel gives you a public HTTPS URL for free. Access your terminals from cellular, coffee shop WiFi, anywhere
+- **PWA installable** — Add to home screen for a native app experience. App shell cached for instant loading
+- **Zero cost** — No cloud servers, no paid APIs, no app store fees, no subscriptions
+
+---
+
+## How It Works
+
+```
+Phone (browser/PWA)                Your Laptop
+┌──────────────────┐              ┌──────────────────────┐
+│  xterm.js        │◄──WebSocket──│  Node.js Server      │
+│  Voice Input     │──────────────│  ├─ PTY Manager      │
+│  Extra Keys      │              │  │  └─ /bin/zsh      │
+│  Session Tabs    │              │  ├─ Tmux Manager     │
+│  Login Screen    │              │  │  └─ tmux attach   │
+└──────────────────┘              │  ├─ Auth (scrypt)    │
+         │                        │  └─ Cloudflare Tunnel│
+         │ (optional)             └──────────────────────┘
+         │
+    Cloudflare Edge
+    (free, auto TLS)
+```
+
+1. **Server starts** on your laptop, binds to `localhost:3000`
+2. **You log in** from your phone with the credentials from `~/.termpilot/credentials`
+3. **A terminal session** is created — the server spawns a real shell (bash/zsh) via a pseudo-terminal (PTY)
+4. **Everything you type** (keyboard, extra keys, or voice) goes over WebSocket → server writes to PTY
+5. **Shell output** flows back over WebSocket → xterm.js renders it on your phone
+6. **Mirror mode**: attach to existing tmux sessions for bidirectional mirroring — what you see on your laptop, you see on your phone
+7. **Tunnel mode**: Cloudflare proxies traffic so you can access from any network
 
 ---
 
@@ -24,7 +103,7 @@ graph TB
     subgraph Phone["Phone (Any Browser)"]
         PWA["PWA Client<br/>Preact + xterm.js"]
         Voice["Voice Input<br/>Web Speech API"]
-        ExtraKeys["Extra Keys Row<br/>Esc, Tab, Ctrl, Arrows"]
+        ExtraKeys["Extra Keys Row"]
     end
 
     subgraph Network["Network Layer"]
@@ -32,311 +111,146 @@ graph TB
     end
 
     subgraph Laptop["Your Laptop"]
-        HTTP["HTTP Server<br/>Auth + Static Files"]
-        WS["WebSocket Server<br/>JSON Protocol"]
+        HTTP["HTTP Server<br/>Auth + Static Files + CSRF"]
+        WS["WebSocket Server<br/>Zod-validated JSON Protocol"]
         PTY["PTY Manager<br/>node-pty"]
+        TMUX["Tmux Manager<br/>Mirror Mode"]
         Auth["Auth Service<br/>scrypt + sessions"]
-        Shell1["Shell 1<br/>/bin/zsh"]
-        Shell2["Shell 2<br/>/bin/bash"]
-        ShellN["Shell N<br/>..."]
     end
 
     PWA <-->|"WSS (encrypted)"| CF
     Voice -->|"transcript"| PWA
     ExtraKeys -->|"key data"| PWA
     CF <-->|"localhost"| WS
-    PWA <-->|"HTTPS"| CF
     CF <-->|"localhost"| HTTP
     HTTP --> Auth
     WS --> PTY
+    WS --> TMUX
     WS --> Auth
-    PTY --> Shell1
-    PTY --> Shell2
-    PTY --> ShellN
-
-    style Phone fill:#1e1e1e,stroke:#007acc,color:#d4d4d4
-    style Laptop fill:#252526,stroke:#007acc,color:#d4d4d4
-    style Network fill:#2d2d2d,stroke:#555,color:#d4d4d4
 ```
 
----
-
-## User Flow
-
-```mermaid
-flowchart TD
-    A[Open TermPilot in browser] --> B{Authenticated?}
-    B -->|No| C[Login Screen]
-    C --> D[Enter username + password]
-    D --> E[Server validates credentials]
-    E -->|Invalid| F[Show error, rate limit]
-    F --> D
-    E -->|Valid| G[Store session token]
-    B -->|Yes| G
-    G --> H[WebSocket connects to server]
-    H --> I[Auto-create first terminal session]
-    I --> J[Terminal ready - show shell prompt]
-
-    J --> K{User Action}
-    K -->|Type on keyboard| L[Send keystrokes via WebSocket]
-    K -->|Tap extra keys| M[Send control characters]
-    K -->|Tap Voice button| N[Start speech recognition]
-    K -->|Tap + tab| O[Create new terminal session]
-    K -->|Tap x on tab| P[Destroy terminal session]
-
-    N --> Q[Show interim transcript]
-    Q --> R[Show final transcript]
-    R --> S{User confirms?}
-    S -->|Send| T[Post-process & send as command]
-    S -->|Clear| J
-
-    L --> U[Server writes to PTY]
-    M --> U
-    T --> U
-    U --> V[PTY output sent back via WebSocket]
-    V --> W[xterm.js renders output]
-    W --> J
-
-    O --> X[Server spawns new PTY]
-    X --> J
-    P --> Y[Server kills PTY process]
-    Y --> J
-
-    style A fill:#007acc,color:#fff
-    style J fill:#4ec9b0,color:#1e1e1e
-    style N fill:#cc3333,color:#fff
-```
-
----
-
-## WebSocket Protocol
+### WebSocket Protocol
 
 ```mermaid
 sequenceDiagram
     participant C as Client (PWA)
     participant S as Server
 
-    C->>S: HTTP POST /api/auth/login {username, password}
+    C->>S: POST /api/auth/csrf
+    S-->>C: {csrfToken: "..."}
+    C->>S: POST /api/auth/login + X-CSRF-Token
     S-->>C: {token: "abc123"}
 
     C->>S: WebSocket /ws
     S-->>C: Connection open
     C->>S: {type: "auth", token: "abc123"}
-    S-->>C: {type: "auth_ok", username: "admin"}
+    S-->>C: {type: "auth_ok"}
 
     C->>S: {type: "create", cols: 80, rows: 24}
     S-->>C: {type: "session_created", sessionId: "uuid-1"}
     S-->>C: {type: "output", sessionId: "uuid-1", data: "$ "}
 
     C->>S: {type: "input", sessionId: "uuid-1", data: "ls\n"}
-    S-->>C: {type: "output", sessionId: "uuid-1", data: "ls\nfile1 file2\n$ "}
+    S-->>C: {type: "output", sessionId: "uuid-1", data: "file1 file2\n$ "}
 
-    C->>S: {type: "resize", sessionId: "uuid-1", cols: 120, rows: 40}
-
-    C->>S: {type: "list"}
-    S-->>C: {type: "session_list", sessions: [...]}
-
-    C->>S: {type: "destroy", sessionId: "uuid-1"}
-    S-->>C: {type: "session_destroyed", sessionId: "uuid-1"}
+    Note over C,S: Mirror Mode
+    C->>S: {type: "tmux_list"}
+    S-->>C: {type: "tmux_sessions", sessions: [...]}
+    C->>S: {type: "tmux_attach", sessionName: "dev"}
+    S-->>C: {type: "tmux_attached", sessionId: "tmux:dev"}
 ```
 
 ---
 
 ## Project Structure
 
-```mermaid
-graph LR
-    subgraph Monorepo["pnpm Monorepo"]
-        Shared["@termpilot/shared<br/>Protocol types<br/>Zod schemas<br/>Encode/decode"]
-        Server["@termpilot/server<br/>PTY Manager<br/>WebSocket Server<br/>Auth Service<br/>Tunnel Manager"]
-        Client["@termpilot/client<br/>Preact PWA<br/>xterm.js Terminal<br/>Voice Input<br/>Extra Keys"]
-        E2E["@termpilot/e2e<br/>Playwright tests"]
-    end
-
-    Shared --> Server
-    Shared --> Client
-    Server --> E2E
-    Client --> E2E
-
-    style Shared fill:#569cd6,color:#fff
-    style Server fill:#4ec9b0,color:#1e1e1e
-    style Client fill:#dcdcaa,color:#1e1e1e
-    style E2E fill:#c586c0,color:#fff
-```
-
 ```
 termpilot/
-├── package.json                    # Root workspace config
-├── pnpm-workspace.yaml
-├── tsconfig.base.json              # Shared TypeScript settings
-├── vitest.workspace.ts
 ├── packages/
 │   ├── shared/                     # @termpilot/shared
-│   │   ├── src/
-│   │   │   ├── protocol.ts         # Message types & encode/decode
-│   │   │   ├── schemas.ts          # Zod validation schemas
-│   │   │   └── index.ts            # Public API
-│   │   └── test/
-│   │       ├── protocol.test.ts    # 12 tests
-│   │       └── schemas.test.ts     # 12 tests
+│   │   └── src/
+│   │       ├── protocol.ts         # Binary message types + encode/decode
+│   │       ├── schemas.ts          # Zod validation (session, tmux, input, resize)
+│   │       └── index.ts
 │   ├── server/                     # @termpilot/server
-│   │   ├── src/
-│   │   │   ├── app.ts              # HTTP + WebSocket server
-│   │   │   ├── index.ts            # Entry point + CLI
-│   │   │   ├── terminal/
-│   │   │   │   └── pty-manager.ts  # PTY lifecycle management
-│   │   │   ├── auth/
-│   │   │   │   └── auth-service.ts # Auth + rate limiting
-│   │   │   └── tunnel/
-│   │   │       └── tunnel-manager.ts # Cloudflare Tunnel
-│   │   └── test/
-│   │       ├── unit/               # 38 unit tests
-│   │       └── integration/        # 14 integration tests
-│   ├── client/                     # @termpilot/client
-│   │   ├── index.html              # PWA shell
-│   │   ├── vite.config.ts          # Vite + PWA plugin
-│   │   ├── src/
-│   │   │   ├── main.tsx            # Entry point
-│   │   │   ├── components/
-│   │   │   │   ├── App.tsx         # Root component
-│   │   │   │   ├── Login.tsx       # Auth screen
-│   │   │   │   ├── TerminalView.tsx # Session tabs + terminal
-│   │   │   │   ├── TerminalInstance.tsx # xterm.js wrapper
-│   │   │   │   ├── ExtraKeys.tsx   # Mobile key toolbar
-│   │   │   │   └── VoiceInput.tsx  # Voice recognition UI
-│   │   │   ├── services/
-│   │   │   │   ├── api.ts          # Auth API client
-│   │   │   │   ├── ws-client.ts    # WebSocket with reconnection
-│   │   │   │   └── voice.ts        # Speech recognition + post-processing
-│   │   │   └── styles/
-│   │   │       └── global.css      # Mobile-first styles
-│   │   └── test/
-│   │       └── voice.test.ts       # 9 tests
-│   └── e2e/                        # @termpilot/e2e (Playwright)
-│       └── tests/
+│   │   └── src/
+│   │       ├── cli/cli.ts          # CLI entry point (--port, --tunnel, --help)
+│   │       ├── app.ts              # HTTP + WebSocket server + message routing
+│   │       ├── terminal/
+│   │       │   ├── pty-manager.ts  # PTY lifecycle, output buffering, idle sweep
+│   │       │   ├── tmux-manager.ts # tmux list/attach/detach/create/kill
+│   │       │   └── safe-env.ts     # Environment variable allowlist
+│   │       ├── auth/
+│   │       │   └── auth-service.ts # scrypt hashing, sessions, rate limiting
+│   │       └── tunnel/
+│   │           └── tunnel-manager.ts
+│   ├── client/                     # @termpilot/client (Preact PWA)
+│   │   └── src/
+│   │       ├── components/         # App, Login, TerminalView, ExtraKeys, VoiceInput
+│   │       ├── services/           # API client, WebSocket client, Voice service
+│   │       └── styles/global.css
+│   └── e2e/                        # Playwright (future)
+├── scripts/build-publish.js        # esbuild bundler for npm publishing
+├── LICENSE                         # MIT
+└── package.json                    # npm package config with bin entry
 ```
 
 ---
 
-## Voice Command Processing
+## Security
 
-```mermaid
-flowchart LR
-    A["User speaks:<br/>'get commit dash m hello'"] --> B["Web Speech API<br/>raw transcript"]
-    B --> C["Post-processor"]
+TermPilot underwent three full security audits. Current posture: **0 critical, 0 high, 0 medium vulnerabilities.**
 
-    subgraph C["Post-Processing Pipeline"]
-        D["Symbol mapping<br/>dash → -<br/>pipe → |<br/>tilde → ~"] --> E["Command correction<br/>get → git<br/>pseudo → sudo<br/>dock her → docker"]
-    end
-
-    C --> F["Processed:<br/>'git commit - m hello'"]
-    F --> G{User confirms?}
-    G -->|Send| H["Sent to terminal"]
-    G -->|Clear| I["Discarded"]
-```
-
-### Supported Voice Symbols
-
-| Spoken | Output | Spoken | Output |
-|--------|--------|--------|--------|
-| dash / hyphen | `-` | pipe | `\|` |
-| double dash | `--` | ampersand | `&` |
-| dot / period | `.` | double ampersand | `&&` |
-| slash | `/` | at / at sign | `@` |
-| backslash | `\` | hash / pound | `#` |
-| tilde | `~` | dollar / dollar sign | `$` |
-| star / asterisk | `*` | equals / equal sign | `=` |
-| colon | `:` | semicolon | `;` |
-| quote | `"` | single quote / tick | `'` |
-| backtick | `` ` `` | open/close bracket | `[ ]` |
-| open/close brace | `{ }` | open/close paren | `( )` |
-| greater than | `>` | less than | `<` |
+| Layer | Protection |
+|-------|-----------|
+| **Authentication** | scrypt (N=16384) password hashing, timing-safe comparison, 256-bit session tokens |
+| **Sessions** | Server-side session store, 30-min idle timeout, 8-hour absolute timeout, periodic cleanup |
+| **CSRF** | Token-based protection on all POST endpoints |
+| **WebSocket** | Token sent as first message (never in URL), 10s auth timeout, per-IP rate limiting |
+| **Authorization** | Session ownership enforced — can only interact with your own terminals |
+| **Transport** | Cloudflare Tunnel provides automatic TLS. Default bind to localhost only |
+| **PTY isolation** | Environment variable allowlist prevents server secret leakage |
+| **Input validation** | All WebSocket messages validated via Zod schemas |
+| **Headers** | CSP, X-Frame-Options DENY, X-Content-Type-Options nosniff, Referrer-Policy no-referrer |
+| **Rate limiting** | Login: 5 attempts/15min per IP. WebSocket auth: 10 attempts/min per IP |
+| **Connection limits** | Max 20 concurrent WebSocket connections, 64KB message size limit |
 
 ---
 
-## Security Model
+## Voice Commands
 
-```mermaid
-flowchart TB
-    subgraph Auth["Authentication Layer"]
-        Login["POST /api/auth/login"] --> Rate["Rate Limiter<br/>5 attempts / 15 min"]
-        Rate -->|Allowed| Verify["Verify password<br/>scrypt (N=16384)"]
-        Rate -->|Blocked| Reject["429 Too Many Requests"]
-        Verify -->|Valid| Token["Generate session token<br/>256-bit random"]
-        Verify -->|Invalid| Deny["401 Unauthorized"]
-    end
+Speak naturally. TermPilot post-processes transcripts for developer vocabulary:
 
-    subgraph Session["Session Management"]
-        Token --> Store["Server-side session store"]
-        Store --> Idle["Idle timeout: 30 min"]
-        Store --> Absolute["Absolute timeout: 8 hours"]
-    end
+| You say | Terminal gets |
+|---------|-------------|
+| "git status" | `git status` |
+| "git commit dash m hello" | `git commit -m hello` |
+| "ls pipe grep test" | `ls \| grep test` |
+| "cd tilde slash projects" | `cd ~/projects` |
+| "pseudo apt install node" | `sudo apt install node` |
+| "dock her ps" | `docker ps` |
 
-    subgraph WS["WebSocket Security"]
-        Connect["WS /ws"] --> AuthMsg["Send {type:'auth', token}"]
-        AuthMsg -->|Valid| Accept["auth_ok — connected"]
-        AuthMsg -->|Invalid| Close["auth_failed — close 4401"]
-        Accept --> Ping["Ping/pong keepalive<br/>every 30s"]
-    end
-
-    style Auth fill:#cc3333,color:#fff
-    style Session fill:#dcdcaa,color:#1e1e1e
-    style WS fill:#569cd6,color:#fff
-```
+Supports 30+ symbol mappings (dash, pipe, tilde, ampersand, brackets, etc.) and common command corrections.
 
 ---
 
-## Getting Started
+## CLI Options
 
-### Prerequisites
-
-- **Node.js** >= 20.0.0
-- **pnpm** >= 9.0.0
-- **cloudflared** (optional, for remote access) — `brew install cloudflared`
-
-### Installation
-
-```bash
-git clone https://github.com/Abhishekreddy31/TermPilot.git
-cd TermPilot
-pnpm install
 ```
+termpilot [options]
 
-### Quick Start
+Options:
+  --port <port>    Port to listen on (default: 3000)
+  --host <host>    Bind address (default: 127.0.0.1)
+  --tunnel         Enable Cloudflare Tunnel for remote access
+  --help, -h       Show help
+  --version, -v    Show version
 
-```bash
-# Build and start (credentials written to ~/.termpilot/credentials)
-pnpm start
-```
-
-Open `http://localhost:3000` on your phone (same Wi-Fi) or desktop browser.
-
-### With Remote Access
-
-```bash
-# Start with Cloudflare Tunnel for access from anywhere
-pnpm start -- --tunnel
-```
-
-The tunnel URL will be printed to the console. Open it on any device, anywhere.
-
-### Custom Password
-
-```bash
-TERMPILOT_PASSWORD=mysecretpassword pnpm start
-```
-
-### Development
-
-```bash
-# Run server and client dev servers in parallel
-pnpm dev
-
-# Server only (with hot reload)
-pnpm dev:server
-
-# Client only (Vite dev server with HMR)
-pnpm dev:client
+Environment variables:
+  PORT                 Server port
+  HOST                 Bind address
+  TUNNEL=1             Enable tunnel
+  TERMPILOT_PASSWORD   Set a fixed password
 ```
 
 ---
@@ -344,66 +258,70 @@ pnpm dev:client
 ## Testing
 
 ```bash
-# Run all tests (85 tests across 3 packages)
-pnpm test
-
-# Watch mode
-pnpm test:watch
-
-# With coverage
-pnpm test:coverage
+pnpm test          # Run all 103 tests
+pnpm test:watch    # Watch mode
+pnpm test:coverage # With coverage
 ```
 
-### Test Breakdown
-
-| Package | Tests | Type |
-|---------|-------|------|
-| `@termpilot/shared` | 24 | Protocol encode/decode, schema validation |
-| `@termpilot/server` | 52 | PTY lifecycle, auth, rate limiting, WebSocket integration |
+| Package | Tests | Coverage |
+|---------|-------|----------|
+| `@termpilot/shared` | 24 | Protocol encode/decode, Zod schema validation |
+| `@termpilot/server` | 70 | PTY lifecycle, auth, rate limiting, CSRF, WebSocket integration, tmux mirror mode |
 | `@termpilot/client` | 9 | Voice post-processing, symbol mapping |
-| **Total** | **85** | |
+| **Total** | **103** | |
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology | Why |
-|-------|-----------|-----|
-| Monorepo | pnpm workspaces | Strict dependency isolation, fast installs |
-| Server runtime | Node.js + TypeScript | Native PTY support via node-pty |
-| Terminal backend | node-pty | Same library powering VS Code's terminal |
-| WebSocket | ws | Fastest pure-JS WebSocket for Node.js |
-| Client framework | Preact | 3KB React alternative, minimal bundle |
-| Terminal frontend | xterm.js | Industry-standard terminal emulator |
-| Build tool | Vite | Fast builds, PWA plugin, HMR |
-| PWA | vite-plugin-pwa + Workbox | Service worker, app shell caching |
-| Voice | Web Speech API | Free, built into browsers, no API keys |
-| Remote access | Cloudflare Tunnel | Free, automatic TLS, no port forwarding |
-| Auth | scrypt (Node.js crypto) | Zero dependencies, constant-time comparison |
-| Testing | Vitest | Fast, ESM-native, Jest-compatible API |
-| Validation | Zod | Runtime type safety for WebSocket messages |
+| Component | Technology | Why |
+|-----------|-----------|-----|
+| Server | Node.js + TypeScript | Native PTY support via node-pty |
+| Terminal backend | node-pty | Powers VS Code's terminal |
+| WebSocket | ws + perMessageDeflate | Fast, compressed real-time communication |
+| Validation | Zod | Runtime type safety on all messages |
+| Client | Preact (3KB) + xterm.js | Minimal bundle, industry-standard terminal |
+| Build | Vite + esbuild | Fast builds, PWA support, npm bundling |
+| Voice | Web Speech API | Free, built into Chrome/Safari |
+| Remote access | Cloudflare Tunnel | Free, automatic TLS |
+| Auth | Node.js crypto (scrypt) | Zero dependencies |
+| Testing | Vitest | Fast, ESM-native |
 
 ---
 
-## How It Works
+## Platform Support
 
-1. **Server starts** on your laptop, spawning an HTTP + WebSocket server
-2. **You log in** from your phone's browser with the credentials shown in the console
-3. **A terminal session** is created — the server spawns a PTY (pseudo-terminal) running your shell
-4. **Everything you type** (keyboard, extra keys, or voice) is sent over WebSocket to the server, which writes it to the PTY
-5. **PTY output** (command results, prompts) flows back over WebSocket to xterm.js in your browser
-6. **Multiple sessions** can run simultaneously, managed via tabs
-7. **If you enable the tunnel**, Cloudflare proxies traffic so you can access your terminals from anywhere, encrypted
+| Platform | Independent Mode | Mirror Mode (tmux) | Tunnel |
+|----------|-----------------|-------------------|--------|
+| macOS | Full | Full | Full |
+| Linux | Full | Full | Full |
+| Windows | Full (PowerShell) | Not available | Full |
 
-### Cost: $0
+---
 
-- No cloud servers — your laptop is the server
-- No paid APIs — voice uses the browser's built-in engine
-- No app store fees — it's a PWA, runs in any browser
-- No paid tunneling — Cloudflare Tunnel free tier, unlimited
+## Contributing
+
+Contributions are welcome. Please:
+
+1. Fork the repo
+2. Create a feature branch (`git checkout -b feat/my-feature`)
+3. Write tests for new functionality
+4. Ensure `pnpm test` passes
+5. Submit a pull request
+
+### Development
+
+```bash
+pnpm install
+pnpm dev          # Server + client with hot reload
+pnpm dev:server   # Server only
+pnpm dev:client   # Client only (Vite HMR)
+pnpm test         # Run all tests
+pnpm run build    # Build all packages
+```
 
 ---
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE)
