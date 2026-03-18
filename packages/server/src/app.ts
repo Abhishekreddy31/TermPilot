@@ -7,6 +7,8 @@ import { randomBytes } from 'node:crypto';
 import { PtyManager } from './terminal/pty-manager.js';
 import { TmuxManager, type AttachResult } from './terminal/tmux-manager.js';
 import { AuthService, RateLimiter } from './auth/auth-service.js';
+import { CreateSessionSchema, InputSchema, ResizeSchema, DestroySessionSchema } from '@termpilot/shared';
+import type { ZodError } from 'zod';
 
 export interface ServerOptions {
   port: number;
@@ -253,6 +255,7 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
         auth,
         close: async () => {
           auth.dispose();
+          ptyManager.dispose();
           ptyManager.destroyAll();
           wss.close();
           await new Promise<void>((r) => httpServer.close(() => r()));
@@ -287,12 +290,21 @@ function handleMessage(
   }
 }
 
+function formatZodError(err: ZodError): string {
+  return err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ');
+}
+
 function handleCreate(
   ws: WebSocket, msg: Record<string, unknown>,
   ptyManager: PtyManager, wsSessionMap: Map<WebSocket, Set<string>>
 ): void {
   try {
-    const { cols, rows } = clampDimensions(msg.cols, msg.rows);
+    const parsed = CreateSessionSchema.safeParse(msg);
+    if (!parsed.success) {
+      sendError(ws, `Invalid create message: ${formatZodError(parsed.error)}`);
+      return;
+    }
+    const { cols, rows } = parsed.data;
     const session = ptyManager.createSession({ cols, rows });
     wsSessionMap.get(ws)?.add(session.id);
 
@@ -317,12 +329,12 @@ function handleInput(
   wsMirrorMap: Map<WebSocket, Map<string, AttachResult>>
 ): void {
   try {
-    const sessionId = msg.sessionId as string;
-    const data = msg.data as string;
-    if (!sessionId || typeof data !== 'string') {
-      sendError(ws, 'Invalid input message: sessionId and data required');
+    const parsed = InputSchema.safeParse(msg);
+    if (!parsed.success) {
+      sendError(ws, `Invalid input: ${formatZodError(parsed.error)}`);
       return;
     }
+    const { sessionId, data } = parsed.data;
 
     const mirror = wsMirrorMap.get(ws)?.get(sessionId);
     if (mirror) { mirror.pty.write(data); return; }
@@ -343,9 +355,12 @@ function handleResize(
   wsMirrorMap: Map<WebSocket, Map<string, AttachResult>>
 ): void {
   try {
-    const sessionId = msg.sessionId as string;
-    if (!sessionId) { sendError(ws, 'Invalid resize message'); return; }
-    const { cols, rows } = clampDimensions(msg.cols, msg.rows);
+    const parsed = ResizeSchema.safeParse(msg);
+    if (!parsed.success) {
+      sendError(ws, `Invalid resize: ${formatZodError(parsed.error)}`);
+      return;
+    }
+    const { sessionId, cols, rows } = parsed.data;
 
     const mirror = wsMirrorMap.get(ws)?.get(sessionId);
     if (mirror) { mirror.pty.resize(cols, rows); return; }
@@ -365,8 +380,12 @@ function handleDestroy(
   ptyManager: PtyManager, wsSessionMap: Map<WebSocket, Set<string>>
 ): void {
   try {
-    const sessionId = msg.sessionId as string;
-    if (!sessionId) { sendError(ws, 'sessionId required'); return; }
+    const parsed = DestroySessionSchema.safeParse(msg);
+    if (!parsed.success) {
+      sendError(ws, `Invalid destroy: ${formatZodError(parsed.error)}`);
+      return;
+    }
+    const { sessionId } = parsed.data;
     if (!wsSessionMap.get(ws)?.has(sessionId)) {
       sendError(ws, 'Session not found or not owned by this connection');
       return;

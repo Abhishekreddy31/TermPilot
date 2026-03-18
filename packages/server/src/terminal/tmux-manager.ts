@@ -1,22 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import * as pty from 'node-pty';
-
-const SAFE_ENV_KEYS = [
-  'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'LC_CTYPE',
-  'TERM', 'COLORTERM', 'PATH', 'EDITOR', 'VISUAL', 'PAGER',
-  'XDG_RUNTIME_DIR', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME',
-  'TMPDIR', 'TZ',
-];
-
-function buildSafeEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const key of SAFE_ENV_KEYS) {
-    if (process.env[key]) env[key] = process.env[key]!;
-  }
-  env.TERM = env.TERM || 'xterm-256color';
-  return env;
-}
+import { buildSafeEnv } from './safe-env.js';
 
 const exec = promisify(execFile);
 

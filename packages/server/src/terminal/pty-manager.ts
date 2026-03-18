@@ -1,5 +1,6 @@
 import * as pty from 'node-pty';
 import { randomUUID } from 'node:crypto';
+import { buildSafeEnv } from './safe-env.js';
 
 export interface SessionOptions {
   cols: number;
@@ -36,26 +37,11 @@ export interface PtyManagerOptions {
 const DEFAULT_SHELL = process.env.SHELL || '/bin/zsh';
 const MAX_OUTPUT_BUFFER = 100 * 1024; // 100KB
 
-// Only pass safe env vars to spawned shells — never leak server secrets
-const SAFE_ENV_KEYS = [
-  'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'LC_CTYPE',
-  'TERM', 'COLORTERM', 'PATH', 'EDITOR', 'VISUAL', 'PAGER',
-  'XDG_RUNTIME_DIR', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME',
-  'TMPDIR', 'TZ',
-];
-
-function buildSafeEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const key of SAFE_ENV_KEYS) {
-    if (process.env[key]) env[key] = process.env[key]!;
-  }
-  env.TERM = env.TERM || 'xterm-256color';
-  return env;
-}
 
 export class PtyManager {
   private sessions = new Map<string, InternalSession>();
   private opts: Required<PtyManagerOptions>;
+  private idleTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(opts: PtyManagerOptions) {
     this.opts = {
@@ -63,6 +49,27 @@ export class PtyManager {
       defaultShell: DEFAULT_SHELL,
       ...opts,
     };
+
+    // Enforce idle timeout — sweep every 60 seconds
+    if (this.opts.idleTimeoutMs > 0) {
+      this.idleTimer = setInterval(() => this.sweepIdleSessions(), 60_000);
+    }
+  }
+
+  dispose(): void {
+    if (this.idleTimer) {
+      clearInterval(this.idleTimer);
+      this.idleTimer = null;
+    }
+  }
+
+  private sweepIdleSessions(): void {
+    const now = Date.now();
+    for (const [id, session] of this.sessions) {
+      if (now - session.lastActivity > this.opts.idleTimeoutMs) {
+        try { this.destroySession(id); } catch {}
+      }
+    }
   }
 
   createSession(options: SessionOptions): Session {

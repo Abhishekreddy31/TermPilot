@@ -119,8 +119,10 @@ sequenceDiagram
     C->>S: HTTP POST /api/auth/login {username, password}
     S-->>C: {token: "abc123"}
 
-    C->>S: WebSocket /ws?token=abc123
-    S-->>C: Connection established
+    C->>S: WebSocket /ws
+    S-->>C: Connection open
+    C->>S: {type: "auth", token: "abc123"}
+    S-->>C: {type: "auth_ok", username: "admin"}
 
     C->>S: {type: "create", cols: 80, rows: 24}
     S-->>C: {type: "session_created", sessionId: "uuid-1"}
@@ -271,9 +273,9 @@ flowchart TB
     end
 
     subgraph WS["WebSocket Security"]
-        Connect["WS /ws?token=xxx"] --> ValidateToken["Validate token<br/>on HTTP upgrade"]
-        ValidateToken -->|Valid| Accept["Accept connection"]
-        ValidateToken -->|Invalid| Close["Reject (401)"]
+        Connect["WS /ws"] --> AuthMsg["Send {type:'auth', token}"]
+        AuthMsg -->|Valid| Accept["auth_ok — connected"]
+        AuthMsg -->|Invalid| Close["auth_failed — close 4401"]
         Accept --> Ping["Ping/pong keepalive<br/>every 30s"]
     end
 
@@ -303,7 +305,7 @@ pnpm install
 ### Quick Start
 
 ```bash
-# Build and start (prints login credentials to console)
+# Build and start (credentials written to ~/.termpilot/credentials)
 pnpm start
 ```
 
