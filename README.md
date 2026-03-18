@@ -383,9 +383,7 @@ pnpm run build    # Build all packages
 </p>
 
 <p align="center">
-  <a href="https://github.com/Abhishekreddy31/TermPilot">
-    <img src="https://img.shields.io/github/stars/Abhishekreddy31/TermPilot?style=social" alt="GitHub stars">
-  </a>
+  <a href="https://github.com/Abhishekreddy31/TermPilot/stargazers">⭐ Star this repo on GitHub</a>
 </p>
 
 ---
