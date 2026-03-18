@@ -12,8 +12,7 @@
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist",
-    "setup": "tsx src/cli/setup.ts"
+    "clean": "rm -rf dist"
   },
   "dependencies": {
     "@termpilot/shared": "workspace:*",

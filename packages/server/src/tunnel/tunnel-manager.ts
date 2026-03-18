@@ -77,7 +77,7 @@ export class TunnelManager {
       this.setState('error');
     });
 
-    this.process.on('close', (code) => {
+    this.process.on('close', () => {
       this._url = null;
       this.process = null;
       if (this._state !== 'error') {

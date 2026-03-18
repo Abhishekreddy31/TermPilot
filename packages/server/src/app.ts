@@ -54,7 +54,6 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
   // #1: CORS origin allowlist — built dynamically from server's own addresses
   const allowedOrigins = new Set<string>();
   const serverHost = opts.host || '127.0.0.1';
-  const serverPort = opts.port;
 
   function registerOrigin(origin: string): void {
     allowedOrigins.add(origin.toLowerCase());
@@ -143,7 +142,7 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
     server: httpServer,
     path: '/ws',
     maxPayload: MAX_WS_PAYLOAD,
-    verifyClient: ({ req }, done) => {
+    verifyClient: (_info, done) => {
       if (activeConnections >= MAX_WS_CONNECTIONS) {
         done(false, 503, 'Too many connections');
         return;
@@ -152,11 +151,11 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
     },
   });
 
-  wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
+  wss.on('connection', (ws: WebSocket, _req: IncomingMessage) => {
     activeConnections++;
     wsSessionMap.set(ws, new Set());
     let authenticated = false;
-    const clientIp = req.socket.remoteAddress || 'unknown';
+    const clientIp = _req.socket.remoteAddress || 'unknown';
 
     const authTimer = setTimeout(() => {
       if (!authenticated) {

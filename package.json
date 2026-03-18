@@ -1,26 +1,44 @@
 {
   "name": "termpilot",
   "version": "1.0.0",
-  "private": true,
   "description": "Mobile-first PWA for managing multiple terminal sessions remotely with voice control",
+  "license": "MIT",
+  "bin": {
+    "termpilot": "./dist/cli/cli.js"
+  },
+  "type": "module",
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "dev": "pnpm -r --parallel run dev",
     "dev:server": "pnpm --filter @termpilot/server dev",
     "dev:client": "pnpm --filter @termpilot/client dev",
-    "build": "pnpm -r run build",
+    "build": "pnpm --filter @termpilot/shared build && pnpm --filter @termpilot/client build && pnpm --filter @termpilot/server build",
+    "build:publish": "node scripts/build-publish.js",
     "test": "pnpm --filter @termpilot/shared --filter @termpilot/server --filter @termpilot/client run test",
-    "start": "pnpm --filter @termpilot/shared build && pnpm --filter @termpilot/client build && pnpm --filter @termpilot/server dev",
+    "start": "pnpm run build && node packages/server/dist/cli/cli.js",
     "test:watch": "pnpm -r --parallel run test:watch",
     "test:coverage": "pnpm -r run test:coverage",
-    "lint": "pnpm -r run lint",
     "typecheck": "pnpm -r run typecheck",
-    "clean": "pnpm -r run clean",
+    "clean": "pnpm -r run clean && rm -rf dist",
     "e2e": "pnpm --filter @termpilot/e2e test",
-    "audit": "pnpm audit --prod"
+    "audit": "pnpm audit --prod",
+    "prepublishOnly": "node scripts/build-publish.js"
   },
   "engines": {
-    "node": ">=20.0.0",
-    "pnpm": ">=9.0.0"
+    "node": ">=20.0.0"
+  },
+  "os": ["linux", "darwin"],
+  "dependencies": {
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

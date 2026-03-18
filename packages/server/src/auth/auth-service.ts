@@ -1,7 +1,13 @@
-import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
-import { promisify } from 'node:util';
+import { randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
 
-const scryptAsync = promisify(scrypt);
+function scryptAsync(password: string, salt: string, keylen: number, options: { N: number; r: number; p: number }): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scryptCb(password, salt, keylen, options, (err, derivedKey) => {
+      if (err) reject(err);
+      else resolve(derivedKey);
+    });
+  });
+}
 
 export interface AuthResult {
   success: boolean;
