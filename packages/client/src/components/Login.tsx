@@ -27,21 +27,26 @@ export function Login({ onLogin }: LoginProps) {
   };
 
   return (
-    <form class="login-screen" onSubmit={handleSubmit}>
+    <form class="login-screen" onSubmit={handleSubmit} aria-label="Login">
       <div class="login-brand">
-        <div class="logo">&gt;_</div>
+        <div class="logo" aria-hidden="true">&gt;_</div>
         <h1>TermPilot</h1>
         <p>Remote terminal management</p>
       </div>
+      <label for="tp-username" class="sr-only">Username</label>
       <input
+        id="tp-username"
         type="text"
         placeholder="Username"
         value={username}
         onInput={(e) => setUsername((e.target as HTMLInputElement).value)}
         autoComplete="username"
         required
+        aria-label="Username"
       />
+      <label for="tp-password" class="sr-only">Password</label>
       <input
+        id="tp-password"
         type="password"
         placeholder="Password"
         value={password}

@@ -144,6 +144,7 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
     server: httpServer,
     path: '/ws',
     maxPayload: MAX_WS_PAYLOAD,
+    perMessageDeflate: true,  // Compress WebSocket messages (terminal output is highly compressible)
     verifyClient: (_info, done) => {
       if (activeConnections >= MAX_WS_CONNECTIONS) {
         done(false, 503, 'Too many connections');
@@ -257,6 +258,11 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
           auth.dispose();
           ptyManager.dispose();
           ptyManager.destroyAll();
+          // Gracefully close all WebSocket connections
+          for (const client of wss.clients) {
+            safeSend(client as WebSocket, JSON.stringify({ type: 'error', message: 'Server shutting down' }));
+            (client as WebSocket).close(1001, 'Server shutting down');
+          }
           wss.close();
           await new Promise<void>((r) => httpServer.close(() => r()));
         },

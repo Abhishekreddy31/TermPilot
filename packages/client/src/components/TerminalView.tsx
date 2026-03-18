@@ -221,7 +221,7 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
         <div class="tmux-picker">
           <div class="tmux-picker-header">
             <span>tmux Sessions</span>
-            <button onClick={() => setShowTmuxPicker(false)} class="close-btn">x</button>
+            <button onClick={() => setShowTmuxPicker(false)} class="close-btn" aria-label="Close tmux picker">x</button>
           </div>
           {tmuxSessions.length === 0 ? (
             <div class="tmux-empty">
@@ -277,12 +277,12 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
           </button>
         ))}
         {mode === 'independent' && (
-          <button class="new-tab-btn" onClick={createSession} title="New terminal">
+          <button class="new-tab-btn" onClick={createSession} title="New terminal" aria-label="Create new terminal session">
             +
           </button>
         )}
         {mode === 'mirror' && (
-          <button class="new-tab-btn" onClick={openTmuxPicker} title="Attach to tmux session">
+          <button class="new-tab-btn" onClick={openTmuxPicker} title="Attach to tmux session" aria-label="Attach to tmux session">
             +
           </button>
         )}

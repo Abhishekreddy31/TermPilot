@@ -80,17 +80,24 @@ export function ExtraKeys({ onKey, onScrollUp, onScrollDown }: ExtraKeysProps) {
   );
 
   return (
-    <div class="extra-keys">
+    <div class="extra-keys" role="toolbar" aria-label="Terminal extra keys">
       {KEYS.map((key) => {
         const isActive =
           (key.label === 'Ctrl' && ctrlActive) ||
           (key.label === 'Alt' && altActive);
+
+        const ariaLabel = key.action === 'scrollUp' ? 'Page Up' :
+          key.action === 'scrollDown' ? 'Page Down' :
+          key.toggle ? `${key.label} modifier${isActive ? ' (active)' : ''}` :
+          `${key.label} key`;
 
         return (
           <button
             key={key.label}
             class={`extra-key ${isActive ? 'toggle-active' : ''} ${key.action ? 'scroll-key' : ''}`}
             onClick={() => handleKey(key)}
+            aria-label={ariaLabel}
+            aria-pressed={key.toggle ? isActive : undefined}
           >
             {key.label}
           </button>

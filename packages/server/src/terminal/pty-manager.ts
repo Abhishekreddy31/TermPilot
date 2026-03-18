@@ -34,7 +34,7 @@ export interface PtyManagerOptions {
   defaultShell?: string;
 }
 
-const DEFAULT_SHELL = process.env.SHELL || '/bin/zsh';
+const DEFAULT_SHELL = process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : '/bin/zsh');
 const MAX_OUTPUT_BUFFER = 100 * 1024; // 100KB
 
 
