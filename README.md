@@ -295,7 +295,14 @@ pnpm test:coverage # With coverage
 |----------|-----------------|-------------------|--------|
 | macOS | Full | Full | Full |
 | Linux | Full | Full | Full |
-| Windows | Full (PowerShell) | Not available | Full |
+| Windows + WSL | Full (PowerShell) | Full (via WSL) | Full |
+| Windows (no WSL) | Full (PowerShell) | Not available | Full |
+
+> **Windows users**: Mirror mode routes through WSL automatically. Just install tmux inside WSL:
+> ```bash
+> wsl --install          # Install WSL (if not already)
+> wsl sudo apt install tmux  # Install tmux inside WSL
+> ```
 
 ---
 

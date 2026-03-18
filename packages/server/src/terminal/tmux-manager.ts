@@ -24,6 +24,7 @@ export interface AttachResult {
 }
 
 const VALID_SESSION_NAME = /^[a-zA-Z0-9_-]+$/;
+const IS_WINDOWS = process.platform === 'win32';
 
 function validateSessionName(name: string): void {
   if (!name || !VALID_SESSION_NAME.test(name)) {
@@ -33,17 +34,33 @@ function validateSessionName(name: string): void {
   }
 }
 
+/**
+ * Build the command and args for running tmux.
+ * On macOS/Linux: ['tmux', [...args]]
+ * On Windows: ['wsl', ['tmux', ...args]]  (routes through WSL)
+ */
+function tmuxCmd(args: string[]): { cmd: string; args: string[] } {
+  if (IS_WINDOWS) {
+    return { cmd: 'wsl', args: ['tmux', ...args] };
+  }
+  return { cmd: 'tmux', args };
+}
+
 export class TmuxManager {
+  private _wslChecked = false;
+  private _wslAvailable = false;
+
   /**
-   * List all active tmux sessions on this machine.
+   * List all active tmux sessions.
    */
   async listSessions(): Promise<TmuxSession[]> {
     try {
-      const { stdout } = await exec('tmux', [
+      const { cmd, args } = tmuxCmd([
         'list-sessions',
         '-F',
         '#{session_name}\t#{session_windows}\t#{session_created_string}\t#{session_attached}',
       ]);
+      const { stdout } = await exec(cmd, args);
 
       return stdout
         .trim()
@@ -60,7 +77,6 @@ export class TmuxManager {
         });
     } catch (err) {
       const message = (err as Error).message || '';
-      // "no server running" or "no sessions" means tmux has no sessions
       if (
         message.includes('no server running') ||
         message.includes('no sessions') ||
@@ -77,9 +93,9 @@ export class TmuxManager {
    */
   async createSession(name: string): Promise<void> {
     validateSessionName(name);
-
     try {
-      await exec('tmux', ['new-session', '-d', '-s', name]);
+      const { cmd, args } = tmuxCmd(['new-session', '-d', '-s', name]);
+      await exec(cmd, args);
     } catch (err) {
       const message = (err as Error).message || '';
       if (message.includes('duplicate session')) {
@@ -95,7 +111,8 @@ export class TmuxManager {
   async killSession(name: string): Promise<void> {
     validateSessionName(name);
     try {
-      await exec('tmux', ['kill-session', '-t', name]);
+      const { cmd, args } = tmuxCmd(['kill-session', '-t', name]);
+      await exec(cmd, args);
     } catch (err) {
       const message = (err as Error).message || '';
       if (
@@ -114,13 +131,14 @@ export class TmuxManager {
   async getSessionWindows(sessionName: string): Promise<TmuxWindow[]> {
     validateSessionName(sessionName);
     try {
-      const { stdout } = await exec('tmux', [
+      const { cmd, args } = tmuxCmd([
         'list-windows',
         '-t',
         sessionName,
         '-F',
         '#{window_index}\t#{window_name}\t#{window_active}',
       ]);
+      const { stdout } = await exec(cmd, args);
 
       return stdout
         .trim()
@@ -140,26 +158,24 @@ export class TmuxManager {
   }
 
   /**
-   * Attach to a tmux session by spawning a PTY running `tmux attach`.
-   * This creates a real-time mirror — anything shown in the tmux session
-   * appears here, and anything typed here appears in the tmux session.
+   * Attach to a tmux session via PTY.
+   * On Windows, spawns through WSL for tmux access.
    */
   attachSession(
     sessionName: string,
     options: { cols: number; rows: number }
   ): AttachResult {
     validateSessionName(sessionName);
-    const ptyProcess = pty.spawn(
-      'tmux',
-      ['attach-session', '-t', sessionName],
-      {
-        name: 'xterm-256color',
-        cols: options.cols,
-        rows: options.rows,
-        cwd: process.env.HOME || '/',
-        env: buildSafeEnv(),
-      }
-    );
+
+    const { cmd, args } = tmuxCmd(['attach-session', '-t', sessionName]);
+
+    const ptyProcess = pty.spawn(cmd, args, {
+      name: 'xterm-256color',
+      cols: options.cols,
+      rows: options.rows,
+      cwd: process.env.HOME || (IS_WINDOWS ? process.env.USERPROFILE || '/' : '/'),
+      env: buildSafeEnv(),
+    });
 
     const cleanup = () => {
       try {
@@ -173,14 +189,39 @@ export class TmuxManager {
   }
 
   /**
-   * Check if tmux is available on this system.
+   * Check if tmux is available.
+   * On Windows, checks if WSL is installed and tmux is available inside it.
    */
   async isAvailable(): Promise<boolean> {
     try {
-      await exec('tmux', ['-V']);
+      const { cmd, args } = tmuxCmd(['-V']);
+      await exec(cmd, args);
+
+      if (IS_WINDOWS) {
+        this._wslChecked = true;
+        this._wslAvailable = true;
+      }
+
       return true;
     } catch {
+      if (IS_WINDOWS) {
+        this._wslChecked = true;
+        this._wslAvailable = false;
+      }
       return false;
     }
+  }
+
+  /**
+   * Get a user-friendly message about mirror mode availability.
+   */
+  getAvailabilityMessage(): string {
+    if (!IS_WINDOWS) {
+      return 'Install tmux: brew install tmux (macOS) or apt install tmux (Linux)';
+    }
+    if (this._wslChecked && !this._wslAvailable) {
+      return 'Mirror mode on Windows requires WSL with tmux installed. Run: wsl --install && wsl sudo apt install tmux';
+    }
+    return 'Mirror mode on Windows requires WSL with tmux. Run: wsl sudo apt install tmux';
   }
 }

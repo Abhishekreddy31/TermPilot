@@ -31,6 +31,7 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
   const [mode, setMode] = useState<Mode>('independent');
   const [tmuxSessions, setTmuxSessions] = useState<TmuxSession[]>([]);
   const [showTmuxPicker, setShowTmuxPicker] = useState(false);
+  const [tmuxUnavailableMsg, setTmuxUnavailableMsg] = useState<string | null>(null);
   const termRef = useRef<{ sendInput: (data: string) => void; scrollUp: () => void; scrollDown: () => void } | null>(null);
   const sessionCounter = useRef(0);
   const sessionsRef = useRef(sessions);
@@ -77,6 +78,7 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
 
       if (msg.type === 'tmux_sessions') {
         setTmuxSessions(msg.sessions as TmuxSession[]);
+        setTmuxUnavailableMsg(msg.unavailable ? (msg.message as string) : null);
       }
 
       if (msg.type === 'tmux_attached') {
@@ -223,7 +225,11 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
             <span>tmux Sessions</span>
             <button onClick={() => setShowTmuxPicker(false)} class="close-btn" aria-label="Close tmux picker">x</button>
           </div>
-          {tmuxSessions.length === 0 ? (
+          {tmuxUnavailableMsg ? (
+            <div class="tmux-empty">
+              {tmuxUnavailableMsg}
+            </div>
+          ) : tmuxSessions.length === 0 ? (
             <div class="tmux-empty">
               No tmux sessions found. Start one with:
               <code>tmux new -s myproject</code>

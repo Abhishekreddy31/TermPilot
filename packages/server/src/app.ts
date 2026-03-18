@@ -522,6 +522,16 @@ async function handleLogout(
 
 async function handleTmuxList(ws: WebSocket, tmux: TmuxManager): Promise<void> {
   try {
+    const available = await tmux.isAvailable();
+    if (!available) {
+      safeSend(ws, JSON.stringify({
+        type: 'tmux_sessions',
+        sessions: [],
+        unavailable: true,
+        message: tmux.getAvailabilityMessage(),
+      }));
+      return;
+    }
     const sessions = await tmux.listSessions();
     safeSend(ws, JSON.stringify({ type: 'tmux_sessions', sessions }));
   } catch (err) { sendError(ws, (err as Error).message); }
