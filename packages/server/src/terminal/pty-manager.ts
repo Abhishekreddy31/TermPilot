@@ -36,6 +36,23 @@ export interface PtyManagerOptions {
 const DEFAULT_SHELL = process.env.SHELL || '/bin/zsh';
 const MAX_OUTPUT_BUFFER = 100 * 1024; // 100KB
 
+// Only pass safe env vars to spawned shells — never leak server secrets
+const SAFE_ENV_KEYS = [
+  'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'LC_CTYPE',
+  'TERM', 'COLORTERM', 'PATH', 'EDITOR', 'VISUAL', 'PAGER',
+  'XDG_RUNTIME_DIR', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME',
+  'TMPDIR', 'TZ',
+];
+
+function buildSafeEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of SAFE_ENV_KEYS) {
+    if (process.env[key]) env[key] = process.env[key]!;
+  }
+  env.TERM = env.TERM || 'xterm-256color';
+  return env;
+}
+
 export class PtyManager {
   private sessions = new Map<string, InternalSession>();
   private opts: Required<PtyManagerOptions>;
@@ -63,7 +80,7 @@ export class PtyManager {
       cols: options.cols,
       rows: options.rows,
       cwd: options.cwd || process.env.HOME || '/',
-      env: { ...process.env } as Record<string, string>,
+      env: buildSafeEnv(),
     });
 
     const session: InternalSession = {
