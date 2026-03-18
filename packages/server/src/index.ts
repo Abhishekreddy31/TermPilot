@@ -37,8 +37,11 @@ async function main() {
         writeFileSync(credFile, `admin:${password}\n`, { mode: 0o600 });
         console.log(`  Password: written to ${credFile}`);
       } catch {
-        // Fallback to console if file write fails
-        console.log(`  Password: ${password}`);
+        // Fallback: log warning, never print password to stdout
+        console.warn('  Password: Could not write credentials file.');
+        console.warn(`             Set TERMPILOT_PASSWORD env var or create ~/.termpilot/credentials manually.`);
+        // Write to stderr as last resort (less likely to be captured by log aggregators)
+        process.stderr.write(`  [one-time] Password: ${password}\n`);
       }
     } else {
       console.log('  Password: (set via TERMPILOT_PASSWORD env var)');

@@ -1,11 +1,30 @@
 const API_BASE = '';
 
+let _csrfToken: string | null = null;
+
+async function getCsrfToken(): Promise<string> {
+  if (_csrfToken) return _csrfToken;
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/csrf`);
+    const data = await res.json();
+    _csrfToken = data.csrfToken;
+    return _csrfToken!;
+  } catch {
+    return '';
+  }
+}
+
 export async function login(username: string, password: string): Promise<string> {
+  const csrf = await getCsrfToken();
+
   let res: Response;
   try {
     res = await fetch(`${API_BASE}/api/auth/login`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrf,
+      },
       body: JSON.stringify({ username, password }),
     });
   } catch {
@@ -34,13 +53,17 @@ export function clearToken(): void {
 }
 
 export async function logout(token: string): Promise<void> {
+  const csrf = await getCsrfToken();
   try {
     await fetch(`${API_BASE}/api/auth/logout`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrf,
+      },
       body: JSON.stringify({ token }),
     });
   } catch {
-    // Ignore — best-effort server-side invalidation
+    // Best-effort server-side invalidation
   }
 }

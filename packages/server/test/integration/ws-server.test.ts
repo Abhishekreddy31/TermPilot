@@ -5,6 +5,13 @@ import { createServer, type TermPilotServer } from '../../src/app.js';
 let server: TermPilotServer;
 let port: number;
 let authToken: string;
+let csrfToken: string;
+
+async function fetchCsrf(): Promise<string> {
+  const res = await fetch(`http://localhost:${port}/api/auth/csrf`);
+  const data = await res.json();
+  return data.csrfToken;
+}
 
 async function connectWs(token?: string): Promise<WebSocket> {
   const url = `ws://localhost:${port}/ws`;
@@ -54,6 +61,7 @@ describe('WebSocket Server Integration', () => {
     await server.auth.createUser('test', 'testpass');
     const result = await server.auth.authenticate('test', 'testpass');
     authToken = result.token!;
+    csrfToken = await fetchCsrf();
   });
 
   afterEach(async () => {
@@ -199,11 +207,12 @@ describe('WebSocket Server Integration', () => {
   });
 
   describe('health endpoint', () => {
-    it('should return health status', async () => {
+    it('should return health status without sensitive info', async () => {
       const res = await fetch(`http://localhost:${port}/health`);
       expect(res.ok).toBe(true);
       const data = await res.json();
       expect(data.status).toBe('ok');
+      expect(data.uptime).toBeUndefined(); // #4: no uptime exposure
     });
   });
 
@@ -211,7 +220,7 @@ describe('WebSocket Server Integration', () => {
     it('should return token on valid credentials', async () => {
       const res = await fetch(`http://localhost:${port}/api/auth/login`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
         body: JSON.stringify({ username: 'test', password: 'testpass' }),
       });
       expect(res.ok).toBe(true);
@@ -222,10 +231,19 @@ describe('WebSocket Server Integration', () => {
     it('should reject invalid credentials', async () => {
       const res = await fetch(`http://localhost:${port}/api/auth/login`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
         body: JSON.stringify({ username: 'test', password: 'wrong' }),
       });
       expect(res.status).toBe(401);
+    });
+
+    it('should reject login without CSRF token', async () => {
+      const res = await fetch(`http://localhost:${port}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'test', password: 'testpass' }),
+      });
+      expect(res.status).toBe(403);
     });
   });
 
@@ -233,7 +251,7 @@ describe('WebSocket Server Integration', () => {
     it('should invalidate token on logout', async () => {
       const res = await fetch(`http://localhost:${port}/api/auth/logout`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
         body: JSON.stringify({ token: authToken }),
       });
       expect(res.ok).toBe(true);
