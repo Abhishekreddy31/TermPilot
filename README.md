@@ -44,6 +44,27 @@
 
 ---
 
+## Why TermPilot?
+
+**Your terminal shouldn't be tied to your desk.**
+
+You're running a deployment, a long build, or a database migration. You step away — to grab coffee, to a meeting, to another room. Now you're stuck wondering: *Did it finish? Did it fail? Do I need to type `y` to confirm something?*
+
+Or you're on the couch and need to quickly SSH somewhere, restart a service, check logs. Your laptop is across the room. You have your phone in your hand.
+
+**TermPilot solves this.** One command, and your laptop's terminal is on your phone:
+
+- **Speak instead of type** — Say "git status" or "docker ps" instead of wrestling with a phone keyboard
+- **Full interactive terminal** — Not just output monitoring. Run vim, htop, interactive prompts — everything works
+- **Mirror what's already running** — Attach to existing tmux sessions and see exactly what's on your laptop screen, in real-time
+- **Access from anywhere** — One flag (`--tunnel`) gives you a public HTTPS URL. Works from cellular, coffee shop WiFi, anywhere
+- **No infrastructure needed** — No servers to deploy, no accounts to create, no subscriptions. It runs on your laptop and your phone's browser. That's it.
+- **Install in 5 seconds** — `npx term-pilot`. No build steps, no config files, no Docker.
+
+TermPilot is built for developers who want their terminal available wherever they are — without complexity, without cost, and without compromise on functionality.
+
+---
+
 ## Quick Start
 
 ```bash
@@ -327,27 +348,6 @@ pnpm test:coverage # With coverage
 > wsl --install          # Install WSL (if not already)
 > wsl sudo apt install tmux  # Install tmux inside WSL
 > ```
-
----
-
-## Why TermPilot?
-
-**Your terminal shouldn't be tied to your desk.**
-
-You're running a deployment, a long build, or a database migration. You step away — to grab coffee, to a meeting, to another room. Now you're stuck wondering: *Did it finish? Did it fail? Do I need to type `y` to confirm something?*
-
-Or you're on the couch and need to quickly SSH somewhere, restart a service, check logs. Your laptop is across the room. You have your phone in your hand.
-
-**TermPilot solves this.** One command, and your laptop's terminal is on your phone:
-
-- **Speak instead of type** — Say "git status" or "docker ps" instead of wrestling with a phone keyboard
-- **Full interactive terminal** — Not just output monitoring. Run vim, htop, interactive prompts — everything works
-- **Mirror what's already running** — Attach to existing tmux sessions and see exactly what's on your laptop screen, in real-time
-- **Access from anywhere** — One flag (`--tunnel`) gives you a public HTTPS URL. Works from cellular, coffee shop WiFi, anywhere
-- **No infrastructure needed** — No servers to deploy, no accounts to create, no subscriptions. It runs on your laptop and your phone's browser. That's it.
-- **Install in 5 seconds** — `npx term-pilot`. No build steps, no config files, no Docker.
-
-TermPilot is built for developers who want their terminal available wherever they are — without complexity, without cost, and without compromise on functionality.
 
 ---
 
