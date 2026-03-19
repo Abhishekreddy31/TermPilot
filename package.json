@@ -1,8 +1,31 @@
 {
   "name": "termpilot",
   "version": "1.0.0",
-  "description": "Mobile-first PWA for managing multiple terminal sessions remotely with voice control",
+  "description": "Control your laptop's terminal from your phone. Voice commands, multi-session tabs, tmux mirroring, remote access.",
   "license": "MIT",
+  "author": "Abhishek Reddy <abhishek@samyama.ai> (https://github.com/Abhishekreddy31)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Abhishekreddy31/TermPilot.git"
+  },
+  "homepage": "https://github.com/Abhishekreddy31/TermPilot#readme",
+  "bugs": {
+    "url": "https://github.com/Abhishekreddy31/TermPilot/issues"
+  },
+  "keywords": [
+    "terminal",
+    "remote-terminal",
+    "pwa",
+    "voice-control",
+    "tmux",
+    "xterm",
+    "websocket",
+    "mobile",
+    "developer-tools",
+    "node-pty",
+    "cloudflare-tunnel",
+    "cli"
+  ],
   "bin": {
     "termpilot": "./dist/cli/cli.js"
   },
@@ -31,7 +54,7 @@
   "engines": {
     "node": ">=20.0.0"
   },
-  "os": ["linux", "darwin"],
+  "os": ["linux", "darwin", "win32"],
   "dependencies": {
     "node-pty": "^1.0.0",
     "ws": "^8.18.0",
