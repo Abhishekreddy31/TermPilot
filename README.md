@@ -332,23 +332,22 @@ pnpm test:coverage # With coverage
 
 ## Why TermPilot?
 
-There are other tools in this space. Here's how TermPilot compares:
+**Your terminal shouldn't be tied to your desk.**
 
-| Feature | TermPilot | ttyd | gotty | wetty | code-server |
-|---------|:---------:|:----:|:-----:|:-----:|:-----------:|
-| Multi-session tabs | Yes | No | No | No | Yes |
-| Voice commands | Yes | No | No | No | No |
-| Mirror existing terminals (tmux) | Yes | No | No | No | No |
-| Mobile-optimized UI | Yes | No | No | No | Partial |
-| Extra keys toolbar | Yes | No | No | No | No |
-| Remote access (free) | Yes | Manual | Manual | Manual | Manual |
-| Touch scrolling | Yes | No | No | No | Partial |
-| PWA installable | Yes | No | No | No | Yes |
-| Zero cost | Yes | Yes | Yes | Yes | Yes |
-| Single command install | `npx term-pilot` | Build from source | Archived | npm | npm |
-| Windows support | Full + WSL | Linux only | Linux/macOS | Linux | Linux/macOS |
+You're running a deployment, a long build, or a database migration. You step away — to grab coffee, to a meeting, to another room. Now you're stuck wondering: *Did it finish? Did it fail? Do I need to type `y` to confirm something?*
 
-**TermPilot is the only tool that combines** multi-session management, voice commands, tmux mirroring, and a mobile-first PWA — all installable with a single command and zero cost.
+Or you're on the couch and need to quickly SSH somewhere, restart a service, check logs. Your laptop is across the room. You have your phone in your hand.
+
+**TermPilot solves this.** One command, and your laptop's terminal is on your phone:
+
+- **Speak instead of type** — Say "git status" or "docker ps" instead of wrestling with a phone keyboard
+- **Full interactive terminal** — Not just output monitoring. Run vim, htop, interactive prompts — everything works
+- **Mirror what's already running** — Attach to existing tmux sessions and see exactly what's on your laptop screen, in real-time
+- **Access from anywhere** — One flag (`--tunnel`) gives you a public HTTPS URL. Works from cellular, coffee shop WiFi, anywhere
+- **No infrastructure needed** — No servers to deploy, no accounts to create, no subscriptions. It runs on your laptop and your phone's browser. That's it.
+- **Install in 5 seconds** — `npx term-pilot`. No build steps, no config files, no Docker.
+
+TermPilot is built for developers who want their terminal available wherever they are — without complexity, without cost, and without compromise on functionality.
 
 ---
 
