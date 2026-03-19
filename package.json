@@ -1,9 +1,9 @@
 {
-  "name": "termpilot",
+  "name": "term-pilot",
   "version": "1.0.0",
   "description": "Control your laptop's terminal from your phone. Voice commands, multi-session tabs, tmux mirroring, remote access.",
   "license": "MIT",
-  "author": "Abhishek Reddy <abhishek@samyama.ai> (https://github.com/Abhishekreddy31)",
+  "author": "Abhishek Reddy <abhisheksingireddy31@gmail.com> (https://github.com/Abhishekreddy31)",
   "repository": {
     "type": "git",
     "url": "https://github.com/Abhishekreddy31/TermPilot.git"
@@ -27,7 +27,7 @@
     "cli"
   ],
   "bin": {
-    "termpilot": "./dist/cli/cli.js"
+    "term-pilot": "./dist/cli/cli.js"
   },
   "type": "module",
   "files": [

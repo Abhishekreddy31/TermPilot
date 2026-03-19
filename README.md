@@ -48,14 +48,14 @@
 
 ```bash
 # Install and run (one command)
-npx termpilot
+npx term-pilot
 
 # Or install globally
-npm install -g termpilot
-termpilot
+npm install -g term-pilot
+term-pilot
 
 # With remote access from anywhere
-termpilot --tunnel
+term-pilot --tunnel
 ```
 
 Credentials are written to `~/.termpilot/credentials`. Open the URL on your phone.
@@ -261,7 +261,7 @@ Supports 30+ symbol mappings (dash, pipe, tilde, ampersand, brackets, etc.) and 
 ## CLI Options
 
 ```
-termpilot [options]
+term-pilot [options]
 
 Options:
   --port <port>    Port to listen on (default: 3000)
@@ -345,7 +345,7 @@ There are other tools in this space. Here's how TermPilot compares:
 | Touch scrolling | Yes | No | No | No | Partial |
 | PWA installable | Yes | No | No | No | Yes |
 | Zero cost | Yes | Yes | Yes | Yes | Yes |
-| Single command install | `npx termpilot` | Build from source | Archived | npm | npm |
+| Single command install | `npx term-pilot` | Build from source | Archived | npm | npm |
 | Windows support | Full + WSL | Linux only | Linux/macOS | Linux | Linux/macOS |
 
 **TermPilot is the only tool that combines** multi-session management, voice commands, tmux mirroring, and a mobile-first PWA — all installable with a single command and zero cost.

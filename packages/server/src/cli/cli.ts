@@ -14,10 +14,10 @@ const args = process.argv.slice(2);
 
 if (args.includes('--help') || args.includes('-h')) {
   console.log(`
-TermPilot — Mobile terminal management with voice control
+Term-Pilot — Mobile terminal management with voice control
 
 Usage:
-  termpilot [options]
+  term-pilot [options]
 
 Options:
   --port <port>    Port to listen on (default: 3000, env: PORT)
@@ -36,7 +36,7 @@ Environment variables:
 }
 
 if (args.includes('--version') || args.includes('-v')) {
-  console.log(`termpilot v${VERSION}`);
+  console.log(`term-pilot v${VERSION}`);
   process.exit(0);
 }
 
@@ -124,7 +124,7 @@ main().catch((err) => {
   // User-friendly port-in-use message
   if (err?.code === 'EADDRINUSE') {
     console.error(`Error: Port ${PORT} is already in use.`);
-    console.error(`Try: termpilot --port ${PORT + 1}`);
+    console.error(`Try: term-pilot --port ${PORT + 1}`);
   } else {
     console.error('Failed to start server:', err);
   }
