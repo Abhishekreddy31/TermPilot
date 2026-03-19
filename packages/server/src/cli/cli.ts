@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 import { createServer } from '../app.js';
 import { TunnelManager } from '../tunnel/tunnel-manager.js';
 import { randomBytes } from 'node:crypto';

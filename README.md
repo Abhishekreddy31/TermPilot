@@ -59,7 +59,7 @@ Or you're on the couch and need to quickly SSH somewhere, restart a service, che
 - **Mirror what's already running** — Attach to existing tmux sessions and see exactly what's on your laptop screen, in real-time
 - **Access from anywhere** — One flag (`--tunnel`) gives you a public HTTPS URL. Works from cellular, coffee shop WiFi, anywhere
 - **No infrastructure needed** — No servers to deploy, no accounts to create, no subscriptions. It runs on your laptop and your phone's browser. That's it.
-- **Install in 5 seconds** — `npx term-pilot`. No build steps, no config files, no Docker.
+- **Install in 5 seconds** — `npx @abhishekreddy31/term-pilot`. No build steps, no config files, no Docker.
 
 TermPilot is built for developers who want their terminal available wherever they are — without complexity, without cost, and without compromise on functionality.
 
@@ -69,10 +69,10 @@ TermPilot is built for developers who want their terminal available wherever the
 
 ```bash
 # Install and run (one command)
-npx term-pilot
+npx @abhishekreddy31/term-pilot
 
 # Or install globally
-npm install -g term-pilot
+npm install -g @abhishekreddy31/term-pilot
 term-pilot
 
 # With remote access from anywhere

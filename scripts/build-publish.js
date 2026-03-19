@@ -45,7 +45,6 @@ buildSync({
   format: 'esm',
   outfile: join(dist, 'cli.js'),
   external: ['node-pty', 'ws'],
-  banner: { js: '#!/usr/bin/env node' },
   // Resolve workspace packages
   alias: {
     '@termpilot/shared': join(ROOT, 'packages/shared/src/index.ts'),
@@ -61,6 +60,11 @@ buildSync({
     ),
   },
 });
+
+// Prepend shebang to cli.js (must be on line 1, no preceding newline)
+const cliPath = join(dist, 'cli.js');
+const cliContent = readFileSync(cliPath, 'utf8');
+writeFileSync(cliPath, '#!/usr/bin/env node\n' + cliContent);
 
 // Copy built client into dist/client
 mkdirSync(join(dist, 'client'), { recursive: true });

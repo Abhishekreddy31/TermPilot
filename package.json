@@ -1,5 +1,5 @@
 {
-  "name": "term-pilot",
+  "name": "@abhishekreddy31/term-pilot",
   "version": "1.0.0",
   "description": "Control your laptop's terminal from your phone. Voice commands, multi-session tabs, tmux mirroring, remote access.",
   "license": "MIT",
@@ -27,7 +27,7 @@
     "cli"
   ],
   "bin": {
-    "term-pilot": "./dist/cli/cli.js"
+    "term-pilot": "./dist/cli.js"
   },
   "type": "module",
   "files": [
