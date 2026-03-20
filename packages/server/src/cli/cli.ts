@@ -5,13 +5,20 @@ import { writeFileSync, mkdirSync, chmodSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
 // Fix node-pty spawn-helper permissions (npm doesn't preserve +x on prebuilds)
+// Walk up from the CLI script to find node_modules/node-pty/prebuilds
 try {
-  const ptyPath = dirname(require.resolve('node-pty'));
-  const prebuildsDir = join(ptyPath, 'prebuilds');
-  for (const platform of readdirSync(prebuildsDir)) {
+  let searchDir = dirname(process.argv[1] || '');
+  for (let i = 0; i < 5; i++) {
+    const prebuildsDir = join(searchDir, 'node_modules', 'node-pty', 'prebuilds');
     try {
-      chmodSync(join(prebuildsDir, platform, 'spawn-helper'), 0o755);
+      for (const platform of readdirSync(prebuildsDir)) {
+        try {
+          chmodSync(join(prebuildsDir, platform, 'spawn-helper'), 0o755);
+        } catch {}
+      }
+      break; // Found and fixed
     } catch {}
+    searchDir = dirname(searchDir);
   }
 } catch {}
 
