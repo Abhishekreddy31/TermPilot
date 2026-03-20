@@ -37,23 +37,10 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
 
+  // Combined state + message handler in a single useEffect to prevent race conditions
+  // (message handler must be registered BEFORE we send 'create' on connect)
   useEffect(() => {
-    const unsub = wsClient.onStateChange((state) => {
-      setConnState(state);
-      // On reconnect, clear stale sessions and create fresh one
-      if (state === 'connected') {
-        setSessions([]);
-        setActiveSessionId(null);
-        sessionCounter.current = 0;
-        wsClient.send({ type: 'create', cols: 80, rows: 24 });
-      }
-    });
-    return unsub;
-  }, [wsClient]);
-
-  // Message handler — no sessions dependency to avoid listener churn
-  useEffect(() => {
-    const unsub = wsClient.onMessage((msg: WsMessage) => {
+    const unsubMsg = wsClient.onMessage((msg: WsMessage) => {
       if (msg.type === 'session_created') {
         const id = msg.sessionId as string;
         sessionCounter.current++;
@@ -107,7 +94,35 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
         wsClient.send({ type: 'tmux_list' });
       }
     });
-    return unsub;
+
+    // State handler — registered AFTER message handler so session_created won't be missed
+    const unsubState = wsClient.onStateChange((state) => {
+      setConnState(state);
+      if (state === 'connected') {
+        setSessions([]);
+        setActiveSessionId(null);
+        sessionCounter.current = 0;
+        // Small delay ensures message handler processes the response
+        setTimeout(() => {
+          wsClient.send({ type: 'create', cols: 80, rows: 24 });
+        }, 50);
+      }
+    });
+
+    // If already connected (e.g. component remount), create initial session
+    if (wsClient.state === 'connected') {
+      setSessions([]);
+      setActiveSessionId(null);
+      sessionCounter.current = 0;
+      setTimeout(() => {
+        wsClient.send({ type: 'create', cols: 80, rows: 24 });
+      }, 50);
+    }
+
+    return () => {
+      unsubMsg();
+      unsubState();
+    };
   }, [wsClient]);
 
   const createSession = useCallback(() => {
