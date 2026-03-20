@@ -82,6 +82,16 @@ body {
   overflow: hidden;
   position: relative;
   background: var(--bg-primary);
+  min-height: 0;
+}
+
+/* Force terminal to fill the wrapper using absolute positioning */
+.terminal-wrapper > div {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
 }
 
 .xterm {
