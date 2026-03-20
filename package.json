@@ -1,6 +1,6 @@
 {
   "name": "@abhishekreddy31/term-pilot",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Control your laptop's terminal from your phone. Voice commands, multi-session tabs, tmux mirroring, remote access.",
   "license": "MIT",
   "author": "Abhishek Reddy <abhisheksingireddy31@gmail.com> (https://github.com/Abhishekreddy31)",

@@ -68,15 +68,28 @@ export const TerminalInstance = forwardRef<
     term.loadAddon(fitAddon);
     term.open(containerRef.current);
 
+    // Double rAF ensures the DOM layout is fully computed before fitting
     requestAnimationFrame(() => {
-      fitAddon.fit();
-      wsClient.send({
-        type: 'resize',
-        sessionId,
-        cols: term.cols,
-        rows: term.rows,
+      requestAnimationFrame(() => {
+        try {
+          fitAddon.fit();
+          wsClient.send({
+            type: 'resize',
+            sessionId,
+            cols: term.cols,
+            rows: term.rows,
+          });
+        } catch {}
       });
     });
+
+    // Fallback: retry fit after a short delay in case layout wasn't ready
+    const fitRetry = setTimeout(() => {
+      try {
+        fitAddon.fit();
+        wsClient.send({ type: 'resize', sessionId, cols: term.cols, rows: term.rows });
+      } catch {}
+    }, 300);
 
     termRef.current = term;
     fitRef.current = fitAddon;
@@ -167,6 +180,7 @@ export const TerminalInstance = forwardRef<
     container.addEventListener('click', handleClick);
 
     return () => {
+      clearTimeout(fitRetry);
       clearTimeout(resizeTimeout);
       dataDisposable.dispose();
       resizeDisposable.dispose();
