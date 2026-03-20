@@ -216,12 +216,15 @@ export class TmuxManager {
    * Get a user-friendly message about mirror mode availability.
    */
   getAvailabilityMessage(): string {
-    if (!IS_WINDOWS) {
-      return 'Install tmux: brew install tmux (macOS) or apt install tmux (Linux)';
+    if (IS_WINDOWS) {
+      if (this._wslChecked && !this._wslAvailable) {
+        return 'Mirror mode on Windows requires WSL with tmux. Run: wsl --install && wsl sudo apt install tmux';
+      }
+      return 'Mirror mode on Windows requires WSL with tmux. Run: wsl sudo apt install tmux';
     }
-    if (this._wslChecked && !this._wslAvailable) {
-      return 'Mirror mode on Windows requires WSL with tmux installed. Run: wsl --install && wsl sudo apt install tmux';
+    if (process.platform === 'darwin') {
+      return 'Mirror mode requires tmux. Install with: brew install tmux';
     }
-    return 'Mirror mode on Windows requires WSL with tmux. Run: wsl sudo apt install tmux';
+    return 'Mirror mode requires tmux. Install with: sudo apt install tmux';
   }
 }

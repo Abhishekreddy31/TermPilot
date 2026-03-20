@@ -69,7 +69,7 @@ export class TunnelManager {
     this.process.on('error', (err) => {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         console.error(
-          'cloudflared not found. Install it with: brew install cloudflared'
+          `cloudflared not found. Install it with: ${process.platform === 'darwin' ? 'brew install cloudflared' : process.platform === 'win32' ? 'winget install cloudflare.cloudflared' : 'curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg && sudo apt update && sudo apt install cloudflared'}`
         );
       }
       this._url = null;
