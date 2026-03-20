@@ -145,12 +145,23 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
   }, []);
 
   const handleScrollUp = useCallback(() => {
-    termRef.current?.scrollUp();
-  }, []);
+    // In mirror mode, send PageUp key to tmux (enters copy mode + scrolls)
+    const activeSession = sessionsRef.current.find((s) => s.id === activeSessionId);
+    if (activeSession?.mode === 'mirror') {
+      wsClient.send({ type: 'input', sessionId: activeSessionId!, data: '\x1b[5~' }); // PageUp escape sequence
+    } else {
+      termRef.current?.scrollUp();
+    }
+  }, [activeSessionId, wsClient]);
 
   const handleScrollDown = useCallback(() => {
-    termRef.current?.scrollDown();
-  }, []);
+    const activeSession = sessionsRef.current.find((s) => s.id === activeSessionId);
+    if (activeSession?.mode === 'mirror') {
+      wsClient.send({ type: 'input', sessionId: activeSessionId!, data: '\x1b[6~' }); // PageDown escape sequence
+    } else {
+      termRef.current?.scrollDown();
+    }
+  }, [activeSessionId, wsClient]);
 
   const handleVoiceCommand = useCallback(
     (command: string) => {
