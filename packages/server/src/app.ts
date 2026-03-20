@@ -637,18 +637,29 @@ const MIME_TYPES: Record<string, string> = {
 };
 
 // Resolve client dist — works in both monorepo dev and published npm layout
-function resolveClientDist(): string {
-  const thisDir = new URL('.', import.meta.url).pathname;
-  // Published layout: dist/cli.js → dist/client/
-  const publishedPath = resolve(thisDir, 'client');
-  // Dev layout: packages/server/src/ → packages/client/dist/
-  const devPath = resolve(thisDir, '..', '..', 'client', 'dist');
+import { statSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-  try {
-    const { statSync } = require('node:fs');
-    if (statSync(join(publishedPath, 'index.html'))) return publishedPath;
-  } catch {}
-  return devPath;
+function resolveClientDist(): string {
+  const thisFile = fileURLToPath(import.meta.url);
+  const thisDir = join(thisFile, '..');
+
+  // Try multiple possible locations
+  const candidates = [
+    resolve(thisDir, 'client'),                        // Published: dist/client/ (sibling)
+    resolve(thisDir, '..', 'client'),                  // Published alt: one level up
+    resolve(thisDir, '..', '..', 'client', 'dist'),    // Dev: packages/server/src → packages/client/dist
+    resolve(thisDir, '..', '..', '..', 'packages', 'client', 'dist'), // Dev alt
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      if (statSync(join(candidate, 'index.html')).isFile()) return candidate;
+    } catch {}
+  }
+
+  // Fallback
+  return candidates[0];
 }
 
 const CLIENT_DIST = resolveClientDist();
