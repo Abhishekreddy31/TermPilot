@@ -97,6 +97,19 @@ async function main() {
     console.log(`TermPilot running on http://${HOST}:${server.port}`);
   }
 
+  // Check tmux availability
+  try {
+    const { execFileSync } = await import('node:child_process');
+    execFileSync('tmux', ['-V'], { stdio: 'ignore' });
+  } catch {
+    const isMac = process.platform === 'darwin';
+    const isWin = process.platform === 'win32';
+    const installCmd = isMac ? 'brew install tmux' : isWin ? 'wsl sudo apt install tmux' : 'sudo apt install tmux';
+    console.log(`  Note:     tmux not found. Mirror mode requires tmux.`);
+    console.log(`            Install with: ${installCmd}`);
+    console.log('');
+  }
+
   let tunnel: TunnelManager | null = null;
   if (ENABLE_TUNNEL) {
     console.log('  !! SECURITY WARNING !!');
