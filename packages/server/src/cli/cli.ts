@@ -1,8 +1,19 @@
 import { createServer } from '../app.js';
 import { TunnelManager } from '../tunnel/tunnel-manager.js';
 import { randomBytes } from 'node:crypto';
-import { writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { writeFileSync, mkdirSync, chmodSync, readdirSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+
+// Fix node-pty spawn-helper permissions (npm doesn't preserve +x on prebuilds)
+try {
+  const ptyPath = dirname(require.resolve('node-pty'));
+  const prebuildsDir = join(ptyPath, 'prebuilds');
+  for (const platform of readdirSync(prebuildsDir)) {
+    try {
+      chmodSync(join(prebuildsDir, platform, 'spawn-helper'), 0o755);
+    } catch {}
+  }
+} catch {}
 
 // Injected by esbuild at build time; falls back for dev mode
 declare const TERMPILOT_VERSION: string | undefined;

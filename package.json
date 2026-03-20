@@ -1,6 +1,6 @@
 {
   "name": "@abhishekreddy31/term-pilot",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Control your laptop's terminal from your phone. Voice commands, multi-session tabs, tmux mirroring, remote access.",
   "license": "MIT",
   "author": "Abhishek Reddy <abhisheksingireddy31@gmail.com> (https://github.com/Abhishekreddy31)",
@@ -49,7 +49,6 @@
     "clean": "pnpm -r run clean && rm -rf dist",
     "e2e": "pnpm --filter @termpilot/e2e test",
     "audit": "pnpm audit --prod",
-    "postinstall": "node -e \"const{chmodSync:c,readdirSync:r}=require('fs'),{join:j}=require('path');try{const d=j(require.resolve('node-pty'),'..','prebuilds');r(d).forEach(p=>{try{c(j(d,p,'spawn-helper'),'755')}catch{}})}catch{}\"",
     "prepublishOnly": "node scripts/build-publish.js"
   },
   "engines": {
