@@ -32,7 +32,7 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
   const [tmuxSessions, setTmuxSessions] = useState<TmuxSession[]>([]);
   const [showTmuxPicker, setShowTmuxPicker] = useState(false);
   const [tmuxUnavailableMsg, setTmuxUnavailableMsg] = useState<string | null>(null);
-  const termRef = useRef<{ sendInput: (data: string) => void; scrollUp: () => void; scrollDown: () => void } | null>(null);
+  const termRefs = useRef<Map<string, { sendInput: (data: string) => void; scrollUp: () => void; scrollDown: () => void }>>(new Map());
   const sessionCounter = useRef(0);
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
@@ -140,28 +140,31 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
     [wsClient]
   );
 
+  const getActiveTermRef = useCallback(() => {
+    return activeSessionId ? termRefs.current.get(activeSessionId) : undefined;
+  }, [activeSessionId]);
+
   const handleExtraKey = useCallback((data: string) => {
-    termRef.current?.sendInput(data);
-  }, []);
+    getActiveTermRef()?.sendInput(data);
+  }, [getActiveTermRef]);
 
   const handleScrollUp = useCallback(() => {
-    // In mirror mode, send PageUp key to tmux (enters copy mode + scrolls)
     const activeSession = sessionsRef.current.find((s) => s.id === activeSessionId);
     if (activeSession?.mode === 'mirror') {
-      wsClient.send({ type: 'input', sessionId: activeSessionId!, data: '\x1b[5~' }); // PageUp escape sequence
+      wsClient.send({ type: 'input', sessionId: activeSessionId!, data: '\x1b[5~' });
     } else {
-      termRef.current?.scrollUp();
+      getActiveTermRef()?.scrollUp();
     }
-  }, [activeSessionId, wsClient]);
+  }, [activeSessionId, wsClient, getActiveTermRef]);
 
   const handleScrollDown = useCallback(() => {
     const activeSession = sessionsRef.current.find((s) => s.id === activeSessionId);
     if (activeSession?.mode === 'mirror') {
-      wsClient.send({ type: 'input', sessionId: activeSessionId!, data: '\x1b[6~' }); // PageDown escape sequence
+      wsClient.send({ type: 'input', sessionId: activeSessionId!, data: '\x1b[6~' });
     } else {
-      termRef.current?.scrollDown();
+      getActiveTermRef()?.scrollDown();
     }
-  }, [activeSessionId, wsClient]);
+  }, [activeSessionId, wsClient, getActiveTermRef]);
 
   const handleVoiceCommand = useCallback(
     (command: string) => {
@@ -321,14 +324,26 @@ export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
       </div>
 
       <div class="terminal-wrapper">
-        {activeSessionId && (
-          <TerminalInstance
-            ref={termRef}
-            key={activeSessionId}
-            sessionId={activeSessionId}
-            wsClient={wsClient}
-          />
-        )}
+        {sessions.map((s) => (
+          <div
+            key={s.id}
+            style={{
+              display: s.id === activeSessionId ? 'block' : 'none',
+              width: '100%',
+              height: '100%',
+            }}
+          >
+            <TerminalInstance
+              ref={(ref) => {
+                if (ref) termRefs.current.set(s.id, ref);
+                else termRefs.current.delete(s.id);
+              }}
+              sessionId={s.id}
+              wsClient={wsClient}
+              visible={s.id === activeSessionId}
+            />
+          </div>
+        ))}
       </div>
 
       <VoiceInput onCommand={handleVoiceCommand} />

@@ -7,12 +7,13 @@ import type { WsClient, WsMessage } from '../services/ws-client.js';
 interface TerminalInstanceProps {
   sessionId: string;
   wsClient: WsClient;
+  visible?: boolean;
 }
 
 export const TerminalInstance = forwardRef<
   { sendInput: (data: string) => void; scrollUp: () => void; scrollDown: () => void },
   TerminalInstanceProps
->(({ sessionId, wsClient }, ref) => {
+>(({ sessionId, wsClient, visible = true }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -194,6 +195,18 @@ export const TerminalInstance = forwardRef<
       term.dispose();
     };
   }, [sessionId, wsClient]);
+
+  // Re-fit terminal when tab becomes visible (switching back from another tab)
+  useEffect(() => {
+    if (visible && fitRef.current && termRef.current) {
+      requestAnimationFrame(() => {
+        try {
+          fitRef.current?.fit();
+          termRef.current?.focus();
+        } catch {}
+      });
+    }
+  }, [visible]);
 
   return (
     <div
