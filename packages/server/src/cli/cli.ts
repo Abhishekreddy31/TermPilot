@@ -135,7 +135,10 @@ async function main() {
   console.log('========================');
   console.log('');
 
+  let shuttingDown = false;
   const shutdown = async (signal: string) => {
+    if (shuttingDown) return; // Prevent double shutdown
+    shuttingDown = true;
     console.log(`\nReceived ${signal}, shutting down...`);
     tunnel?.stop();
     await server.close();
