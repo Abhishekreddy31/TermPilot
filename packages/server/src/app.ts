@@ -234,7 +234,17 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
     });
   });
 
-  return new Promise<TermPilotServer>((resolve) => {
+  return new Promise<TermPilotServer>((resolve, reject) => {
+    httpServer.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error(`\nError: Port ${opts.port} is already in use.`);
+        console.error(`Try: term-pilot --port ${opts.port + 1}\n`);
+      } else {
+        console.error('Server error:', err.message);
+      }
+      reject(err);
+    });
+
     httpServer.listen(opts.port, serverHost, () => {
       const addr = httpServer.address();
       const actualPort = typeof addr === 'object' && addr ? addr.port : opts.port;
