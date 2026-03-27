@@ -234,18 +234,27 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
     });
   });
 
-  return new Promise<TermPilotServer>((resolve, reject) => {
-    httpServer.on('error', (err: NodeJS.ErrnoException) => {
-      if (err.code === 'EADDRINUSE') {
-        console.error(`\nError: Port ${opts.port} is already in use.`);
-        console.error(`Try: term-pilot --port ${opts.port + 1}\n`);
-      } else {
-        console.error('Server error:', err.message);
-      }
-      reject(err);
-    });
+  const maxPortAttempts = 10;
+  let currentPort = opts.port;
 
-    httpServer.listen(opts.port, serverHost, () => {
+  return new Promise<TermPilotServer>((resolve, reject) => {
+    function tryListen() {
+      httpServer.removeAllListeners('error');
+      httpServer.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'EADDRINUSE' && currentPort - opts.port < maxPortAttempts) {
+          currentPort++;
+          console.log(`  Port ${currentPort - 1} in use, trying ${currentPort}...`);
+          tryListen();
+        } else if (err.code === 'EADDRINUSE') {
+          console.error(`\nError: Ports ${opts.port}-${currentPort} are all in use.`);
+          reject(err);
+        } else {
+          console.error('Server error:', err.message);
+          reject(err);
+        }
+      });
+
+      httpServer.listen(currentPort, serverHost, () => {
       const addr = httpServer.address();
       const actualPort = typeof addr === 'object' && addr ? addr.port : opts.port;
 
@@ -266,7 +275,6 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
           auth.dispose();
           ptyManager.dispose();
           ptyManager.destroyAll();
-          // Gracefully close all WebSocket connections
           for (const client of wss.clients) {
             safeSend(client as WebSocket, JSON.stringify({ type: 'error', message: 'Server shutting down' }));
             (client as WebSocket).close(1001, 'Server shutting down');
@@ -276,6 +284,9 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
         },
       });
     });
+    }
+
+    tryListen();
   });
 }
 
