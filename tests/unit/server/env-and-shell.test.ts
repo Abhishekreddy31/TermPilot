@@ -35,9 +35,18 @@ describe('buildSafeEnv', () => {
     for (const key of ['AWS_SECRET_ACCESS_KEY', 'GITHUB_TOKEN', 'TERMPILOT_PASSWORD', 'TMUX']) expect(env).not.toHaveProperty(key);
   });
 
-  it('keeps the variables Windows programs need, matching names case-insensitively', () => {
-    const env = buildSafeEnv({ Path: 'C:\\Windows', SYSTEMROOT: 'C:\\Windows', USERPROFILE: 'C:\\Users\\u', ComSpec: 'cmd.exe', API_KEY: 'leak' }, 'win32');
+  it('falls back to an allowlist on Windows when the registry cannot be read, matching names case-insensitively', () => {
+    const env = buildSafeEnv({ Path: 'C:\\Windows', SYSTEMROOT: 'C:\\Windows', USERPROFILE: 'C:\\Users\\u', ComSpec: 'cmd.exe', API_KEY: 'leak' }, 'win32', () => null);
     expect(env).toMatchObject({ PATH: 'C:\\Windows', SystemRoot: 'C:\\Windows', USERPROFILE: 'C:\\Users\\u', ComSpec: 'cmd.exe' });
+    expect(env).not.toHaveProperty('API_KEY');
+  });
+
+  it('uses the Windows session environment from the registry when available', () => {
+    const registry = (key: string) => (key.startsWith('HKLM')
+      ? '    Path    REG_EXPAND_SZ    %SystemRoot%\\system32\r\n    ComSpec    REG_EXPAND_SZ    %SystemRoot%\\system32\\cmd.exe\r\n'
+      : key === 'HKCU\\Environment' ? '    JAVA_HOME    REG_SZ    C:\\jdk\r\n' : null);
+    const env = buildSafeEnv({ SystemRoot: 'C:\\Windows', TMUX_TMPDIR: 'C:\\t', API_KEY: 'leak', TERM: 'dumb' }, 'win32', registry);
+    expect(env).toMatchObject({ Path: 'C:\\Windows\\system32', ComSpec: 'C:\\Windows\\system32\\cmd.exe', JAVA_HOME: 'C:\\jdk', TMUX_TMPDIR: 'C:\\t', TERM: DEFAULT_TERM });
     expect(env).not.toHaveProperty('API_KEY');
   });
 

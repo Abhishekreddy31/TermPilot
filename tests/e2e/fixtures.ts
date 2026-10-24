@@ -1,5 +1,5 @@
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test as base, expect, type Locator, type Page } from '@playwright/test';
@@ -20,6 +20,8 @@ export interface RunningCli {
 /** Environment for a CLI run: a throwaway home and a private tmux server. */
 export function isolatedEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const home = mkdtempSync(join(tmpdir(), 'termpilot-home-'));
+  // A real profile has these; Windows' per-user TEMP points into it.
+  if (IS_WINDOWS) mkdirSync(join(home, 'AppData', 'Local', 'Temp'), { recursive: true });
   const tmuxDir = mkdtempSync(join(tmpdir(), 'termpilot-tmux-'));
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, TMUX_TMPDIR: tmuxDir, TERMPILOT_DEBUG: '1', ...extra };
   delete env.TMUX;

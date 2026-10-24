@@ -2,6 +2,9 @@ import { request } from 'node:http';
 import { networkInterfaces } from 'node:os';
 import { IS_WINDOWS, PASSWORD, activeTerminal, computed, expect, expectTerminalText, run, signIn, startCli, test, typeCommand } from './fixtures.js';
 
+/** Generous for a loaded CI runner, far below the ~35 s stall this guards against. */
+const FIRST_COMMAND_BUDGET_MS = 8_000;
+
 // A command that runs long enough to be interrupted, on each platform's default shell.
 const LONG_COMMAND = IS_WINDOWS ? 'Start-Sleep -Seconds 60' : 'sleep 60';
 
@@ -23,6 +26,15 @@ test.describe('phone UI', () => {
   test('runs commands in a real shell', async ({ page, app }) => {
     await signIn(page, app.url);
     await run(page, computed('e2e-hello'));
+  });
+
+  test('answers the first command in a new shell promptly', async ({ page, app }) => {
+    // With a stripped environment, Windows PowerShell stalled ~35 s on its first command.
+    await signIn(page, app.url);
+    await expect(page.locator('.terminal-slot:not([hidden]) .xterm-rows')).toContainText(IS_WINDOWS ? /PS .*>/ : '$', { timeout: 15_000 });
+    const first = computed('first-command');
+    await typeCommand(page, first.command);
+    await expectTerminalText(page, first.output, FIRST_COMMAND_BUDGET_MS);
   });
 
   test('opens, switches and closes tabs', async ({ page, app }) => {

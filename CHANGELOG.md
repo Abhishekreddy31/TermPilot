@@ -34,8 +34,9 @@
   now paused until the phone catches up.
 - Replayed output no longer makes the terminal re-answer old queries (which typed stray text into tmux and vim).
 - The tunnel could fail where `localhost` resolves to `::1`.
-- `HOME` was assumed on Windows (credentials went to `\tmp`), and shells lacked the Windows environment variables
-  PowerShell and WSL need. `$SHELL` from Git Bash is no longer used on Windows; Linux falls back to the account's
+- On Windows, shells now get the user's session environment (from the registry, as a terminal opened from the
+  Start menu does): previously PowerShell stalled for about 35 seconds on its first command and user variables
+  such as `JAVA_HOME` were missing. `HOME` is no longer assumed (credentials went to `\tmp`). `$SHELL` from Git Bash is no longer used on Windows; Linux falls back to the account's
   shell instead of `/bin/zsh`.
 - tmux listing and attaching now use the same `TMUX_TMPDIR`; `SSH_AUTH_SOCK` is passed to shells so SSH-based git
   works.
