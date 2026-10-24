@@ -1,0 +1,17 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
+    "declaration": false,
+    "declarationMap": false,
+    "paths": {
+      "@termpilot/shared": ["../packages/shared/src/index.ts"],
+      "@termpilot/shared/schemas": ["../packages/shared/src/schemas.ts"]
+    }
+  },
+  "include": ["./**/*.ts", "./**/*.tsx", "../vitest.config.ts"]
+}

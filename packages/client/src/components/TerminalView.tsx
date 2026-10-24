@@ -1,353 +1,396 @@
-import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
-import type { WsClient, ConnectionState, WsMessage } from '../services/ws-client.js';
-import { TerminalInstance } from './TerminalInstance.js';
+import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
+import {
+  DEFAULT_TERMINAL_SIZE,
+  type ServerMessage,
+  type SessionInfo,
+  type SessionKind,
+  type TmuxSessionInfo,
+} from '@termpilot/shared';
+import type { ConnectionState, WsClient } from '../services/ws-client.js';
+import { NO_MODIFIERS, applyModifiers, hasModifiers, type Modifiers } from '../services/keys.js';
+import { TerminalInstance, type TerminalHandle, type TerminalSize } from './TerminalInstance.js';
 import { ExtraKeys } from './ExtraKeys.js';
 import { VoiceInput } from './VoiceInput.js';
 
-type Mode = 'independent' | 'mirror';
-
-interface Session {
-  id: string;
-  label: string;
-  mode: Mode;
+export interface Tab {
+  /** Stable identity for the rendered terminal; survives a tmux re-attach that changes sessionId. */
+  key: string;
+  sessionId: string;
+  kind: SessionKind;
   tmuxName?: string;
+  label: string;
+  /** A tmux tab whose client ended with the previous connection and is being re-attached. */
+  reattaching?: boolean;
 }
 
-interface TmuxSession {
-  name: string;
-  windows: number;
-  attached: boolean;
-}
+type Mode = 'shell' | 'tmux';
+
+const NOTICE_DURATION_MS = 6_000;
+/** tmux's own key for scrolling (enters copy mode with the default bindings). */
+const PAGE_KEYS = { [-1]: '\x1b[5~', [1]: '\x1b[6~' } as const;
 
 interface TerminalViewProps {
   wsClient: WsClient;
   onLogout: () => void;
 }
 
+/** The real size of a tab's terminal, if it has been laid out. */
+function sizeOf(handles: Map<string, TerminalHandle>, tab: Tab): TerminalSize | undefined {
+  return handles.get(tab.key)?.size() ?? undefined;
+}
+
+function tabFor(session: SessionInfo, shellNumber: number): Tab {
+  return {
+    key: session.id,
+    sessionId: session.id,
+    kind: session.kind,
+    tmuxName: session.tmuxName,
+    label: session.kind === 'tmux' ? `[tmux] ${session.tmuxName}` : `Shell ${shellNumber}`,
+  };
+}
+
 export function TerminalView({ wsClient, onLogout }: TerminalViewProps) {
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [tabs, setTabs] = useState<Tab[]>([]);
+  const [activeKey, setActiveKey] = useState<string | null>(null);
   const [connState, setConnState] = useState<ConnectionState>(wsClient.state);
-  const [mode, setMode] = useState<Mode>('independent');
-  const [tmuxSessions, setTmuxSessions] = useState<TmuxSession[]>([]);
+  const [mode, setMode] = useState<Mode>('shell');
+  const [tmuxSessions, setTmuxSessions] = useState<TmuxSessionInfo[]>([]);
+  const [tmuxUnavailable, setTmuxUnavailable] = useState<string | null>(null);
   const [showTmuxPicker, setShowTmuxPicker] = useState(false);
-  const [tmuxUnavailableMsg, setTmuxUnavailableMsg] = useState<string | null>(null);
-  const termRefs = useRef<Map<string, { sendInput: (data: string) => void; scrollUp: () => void; scrollDown: () => void }>>(new Map());
-  const sessionCounter = useRef(0);
-  const sessionsRef = useRef(sessions);
-  sessionsRef.current = sessions;
+  const [notice, setNotice] = useState<string | null>(null);
+  const [modifiers, setModifiers] = useState<Modifiers>(NO_MODIFIERS);
 
-  // Combined state + message handler in a single useEffect to prevent race conditions
-  // (message handler must be registered BEFORE we send 'create' on connect)
-  useEffect(() => {
-    const unsubMsg = wsClient.onMessage((msg: WsMessage) => {
-      if (msg.type === 'session_created') {
-        const id = msg.sessionId as string;
-        sessionCounter.current++;
-        setSessions((prev) => [
-          ...prev,
-          { id, label: `Shell ${sessionCounter.current}`, mode: 'independent' },
-        ]);
-        setActiveSessionId(id);
-      }
+  // Message handlers need the current tabs synchronously, so the ref is the source of truth.
+  const tabsRef = useRef<Tab[]>([]);
+  const activeKeyRef = useRef<string | null>(null);
+  const handles = useRef(new Map<string, TerminalHandle>());
+  const shellCounter = useRef(0);
+  const modifiersRef = useRef(modifiers);
+  modifiersRef.current = modifiers;
 
-      if (msg.type === 'session_destroyed') {
-        const id = msg.sessionId as string;
-        setSessions((prev) => {
-          const next = prev.filter((s) => s.id !== id);
-          // Fix active session using the filtered list, not stale closure
-          setActiveSessionId((prevActive) =>
-            prevActive === id ? (next[0]?.id ?? null) : prevActive
-          );
-          return next;
-        });
-      }
-
-      if (msg.type === 'tmux_sessions') {
-        setTmuxSessions(msg.sessions as TmuxSession[]);
-        setTmuxUnavailableMsg(msg.unavailable ? (msg.message as string) : null);
-      }
-
-      if (msg.type === 'tmux_attached') {
-        const id = msg.sessionId as string;
-        const name = msg.sessionName as string;
-        setSessions((prev) => [
-          ...prev,
-          { id, label: `[tmux] ${name}`, mode: 'mirror', tmuxName: name },
-        ]);
-        setActiveSessionId(id);
-        setShowTmuxPicker(false);
-      }
-
-      if (msg.type === 'tmux_detached') {
-        const id = msg.sessionId as string;
-        setSessions((prev) => {
-          const next = prev.filter((s) => s.id !== id);
-          setActiveSessionId((prevActive) =>
-            prevActive === id ? (next[0]?.id ?? null) : prevActive
-          );
-          return next;
-        });
-      }
-
-      if (msg.type === 'tmux_created' || msg.type === 'tmux_killed') {
-        wsClient.send({ type: 'tmux_list' });
-      }
-    });
-
-    // State handler — registered AFTER message handler so session_created won't be missed
-    const unsubState = wsClient.onStateChange((state) => {
-      setConnState(state);
-      if (state === 'connected') {
-        setSessions([]);
-        setActiveSessionId(null);
-        sessionCounter.current = 0;
-        // Small delay ensures message handler processes the response
-        setTimeout(() => {
-          wsClient.send({ type: 'create', cols: 80, rows: 24 });
-        }, 50);
-      }
-    });
-
-    // If already connected (e.g. component remount), create initial session
-    if (wsClient.state === 'connected') {
-      setSessions([]);
-      setActiveSessionId(null);
-      sessionCounter.current = 0;
-      setTimeout(() => {
-        wsClient.send({ type: 'create', cols: 80, rows: 24 });
-      }, 50);
+  const commitTabs = useCallback((next: Tab[]) => {
+    tabsRef.current = next;
+    setTabs(next);
+    const active = activeKeyRef.current;
+    if (active === null || !next.some((tab) => tab.key === active)) {
+      activeKeyRef.current = next[0]?.key ?? null;
+      setActiveKey(activeKeyRef.current);
     }
+  }, []);
+
+  const activate = useCallback((key: string) => {
+    activeKeyRef.current = key;
+    setActiveKey(key);
+  }, []);
+
+  const attach = useCallback((tab: Tab, size = sizeOf(handles.current, tab)) => {
+    wsClient.send({ type: 'attach', sessionId: tab.sessionId, ...(size ? { size } : {}) });
+  }, [wsClient]);
+
+  /** Size for a new terminal: what the visible terminal has, since new tabs fill the same area. */
+  const newTerminalSize = useCallback((): TerminalSize => {
+    const active = tabsRef.current.find((tab) => tab.key === activeKeyRef.current);
+    return (active && sizeOf(handles.current, active)) ?? DEFAULT_TERMINAL_SIZE;
+  }, []);
+
+  useEffect(() => {
+    const nextShellLabel = () => ++shellCounter.current;
+
+    /** After (re)connecting: keep tabs whose sessions survived, add ones we did not know, re-attach tmux. */
+    const reconcile = (sessions: SessionInfo[]) => {
+      const live = new Map(sessions.map((session) => [session.id, session]));
+      const known = new Set(tabsRef.current.map((tab) => tab.sessionId));
+      const kept: Tab[] = [];
+      const reattach: Tab[] = [];
+      for (const tab of tabsRef.current) {
+        if (live.has(tab.sessionId)) kept.push(tab);
+        else if (tab.kind === 'tmux' && tab.tmuxName) {
+          const pending = { ...tab, reattaching: true };
+          kept.push(pending);
+          reattach.push(pending);
+        }
+      }
+      const added = sessions.filter((session) => !known.has(session.id)).map((session) => tabFor(session, nextShellLabel()));
+      const next = [...kept, ...added];
+      commitTabs(next);
+
+      // Newly added tabs attach when their terminal mounts (onReady); existing ones attach now.
+      for (const tab of kept) if (!tab.reattaching) attach(tab);
+      for (const tab of reattach) {
+        wsClient.send({ type: 'tmux_attach', sessionName: tab.tmuxName!, ...(sizeOf(handles.current, tab) ?? newTerminalSize()) });
+      }
+      if (next.length === 0) wsClient.send({ type: 'create', ...newTerminalSize() });
+    };
+
+    const onCreated = (session: SessionInfo) => {
+      const pending = session.kind === 'tmux'
+        ? tabsRef.current.find((tab) => tab.reattaching && tab.tmuxName === session.tmuxName)
+        : undefined;
+      if (pending) {
+        const updated: Tab = { ...pending, sessionId: session.id, reattaching: false };
+        commitTabs(tabsRef.current.map((tab) => (tab.key === pending.key ? updated : tab)));
+        attach(updated);
+        return;
+      }
+      const tab = tabFor(session, session.kind === 'shell' ? nextShellLabel() : 0);
+      commitTabs([...tabsRef.current, tab]);
+      activate(tab.key);
+      setShowTmuxPicker(false);
+    };
+
+    const removeTabs = (predicate: (tab: Tab) => boolean) => {
+      const next = tabsRef.current.filter((tab) => !predicate(tab));
+      if (next.length !== tabsRef.current.length) commitTabs(next);
+    };
+
+    const unsubscribeMessages = wsClient.onMessage((message: ServerMessage) => {
+      switch (message.type) {
+        case 'session_list':
+          reconcile(message.sessions);
+          break;
+        case 'session_created':
+          onCreated(message.session);
+          break;
+        case 'session_closed':
+          removeTabs((tab) => tab.sessionId === message.sessionId);
+          break;
+        case 'tmux_sessions':
+          setTmuxSessions(message.sessions);
+          setTmuxUnavailable(message.unavailable ?? null);
+          break;
+        case 'tmux_created':
+        case 'tmux_killed':
+          wsClient.send({ type: 'tmux_list' });
+          break;
+        case 'error': {
+          const { tmuxName } = message;
+          if (tmuxName) removeTabs((tab) => Boolean(tab.reattaching) && tab.tmuxName === tmuxName);
+          // A stale tab racing a reconnect is not worth interrupting the user for.
+          const staleSession = message.sessionId !== undefined
+            && !tabsRef.current.some((tab) => tab.sessionId === message.sessionId);
+          if (!staleSession) setNotice(message.message);
+          break;
+        }
+        default:
+          break;
+      }
+    });
+
+    const onState = (state: ConnectionState) => {
+      setConnState(state);
+      if (state === 'connected') wsClient.send({ type: 'list' });
+    };
+    const unsubscribeState = wsClient.onStateChange(onState);
+    if (wsClient.state === 'connected') onState('connected');
 
     return () => {
-      unsubMsg();
-      unsubState();
+      unsubscribeMessages();
+      unsubscribeState();
     };
+  }, [wsClient, commitTabs, activate, attach, newTerminalSize]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), NOTICE_DURATION_MS);
+    return () => clearTimeout(timer);
+  }, [notice]);
+
+  const activeTab = tabs.find((tab) => tab.key === activeKey) ?? null;
+
+  /** Every keystroke, typed or tapped, goes through the armed modifiers exactly once. */
+  const sendKeystroke = useCallback((tab: Tab, data: string) => {
+    const mods = modifiersRef.current;
+    if (hasModifiers(mods)) setModifiers(NO_MODIFIERS);
+    wsClient.sendInput(tab.sessionId, applyModifiers(data, mods));
   }, [wsClient]);
 
-  const createSession = useCallback(() => {
-    wsClient.send({ type: 'create', cols: 80, rows: 24 });
+  const onExtraKey = useCallback((data: string) => {
+    const tab = tabsRef.current.find((t) => t.key === activeKeyRef.current);
+    if (tab) sendKeystroke(tab, data);
+    if (tab) handles.current.get(tab.key)?.focus();
+  }, [sendKeystroke]);
+
+  const onPage = useCallback((direction: -1 | 1) => {
+    const tab = tabsRef.current.find((t) => t.key === activeKeyRef.current);
+    if (!tab) return;
+    if (tab.kind === 'tmux') wsClient.sendInput(tab.sessionId, PAGE_KEYS[direction]);
+    else handles.current.get(tab.key)?.scrollPages(direction);
   }, [wsClient]);
 
-  const destroySession = useCallback(
-    (session: Session) => {
-      if (session.mode === 'mirror' && session.tmuxName) {
-        wsClient.send({ type: 'tmux_detach', sessionName: session.tmuxName });
-      } else {
-        wsClient.send({ type: 'destroy', sessionId: session.id });
-      }
-    },
-    [wsClient]
-  );
-
-  const getActiveTermRef = useCallback(() => {
-    return activeSessionId ? termRefs.current.get(activeSessionId) : undefined;
-  }, [activeSessionId]);
-
-  const handleExtraKey = useCallback((data: string) => {
-    getActiveTermRef()?.sendInput(data);
-  }, [getActiveTermRef]);
-
-  const handleScrollUp = useCallback(() => {
-    const activeSession = sessionsRef.current.find((s) => s.id === activeSessionId);
-    if (activeSession?.mode === 'mirror') {
-      wsClient.send({ type: 'input', sessionId: activeSessionId!, data: '\x1b[5~' });
-    } else {
-      getActiveTermRef()?.scrollUp();
-    }
-  }, [activeSessionId, wsClient, getActiveTermRef]);
-
-  const handleScrollDown = useCallback(() => {
-    const activeSession = sessionsRef.current.find((s) => s.id === activeSessionId);
-    if (activeSession?.mode === 'mirror') {
-      wsClient.send({ type: 'input', sessionId: activeSessionId!, data: '\x1b[6~' });
-    } else {
-      getActiveTermRef()?.scrollDown();
-    }
-  }, [activeSessionId, wsClient, getActiveTermRef]);
-
-  const handleVoiceCommand = useCallback(
-    (command: string) => {
-      if (activeSessionId) {
-        wsClient.send({
-          type: 'input',
-          sessionId: activeSessionId,
-          data: command + '\n',
-        });
-      }
-    },
-    [wsClient, activeSessionId]
-  );
+  const onVoiceCommand = useCallback((command: string) => {
+    const tab = tabsRef.current.find((t) => t.key === activeKeyRef.current);
+    if (tab) wsClient.sendInput(tab.sessionId, `${command}\r`);
+  }, [wsClient]);
 
   const openTmuxPicker = useCallback(() => {
     wsClient.send({ type: 'tmux_list' });
     setShowTmuxPicker(true);
   }, [wsClient]);
 
-  const attachTmux = useCallback(
-    (name: string) => {
-      const current = sessionsRef.current;
-      if (current.some((s) => s.id === `tmux:${name}`)) {
-        setActiveSessionId(`tmux:${name}`);
-        setShowTmuxPicker(false);
-        return;
-      }
-      wsClient.send({ type: 'tmux_attach', sessionName: name, cols: 80, rows: 24 });
-    },
-    [wsClient]
-  );
+  const attachTmux = useCallback((name: string) => {
+    const existing = tabsRef.current.find((tab) => tab.kind === 'tmux' && tab.tmuxName === name);
+    if (existing) {
+      activate(existing.key);
+      setShowTmuxPicker(false);
+      return;
+    }
+    wsClient.send({ type: 'tmux_attach', sessionName: name, ...newTerminalSize() });
+  }, [wsClient, activate, newTerminalSize]);
 
-  const statusClass =
-    connState === 'connected'
-      ? 'connected'
-      : connState === 'connecting'
-        ? 'connecting'
-        : 'disconnected';
+  const statusClass = connState === 'connected' ? 'connected' : connState === 'connecting' ? 'connecting' : 'disconnected';
 
   return (
     <div class="terminal-container">
       <div class="header">
         <div class="header-brand">
-          <span class={`status-dot ${statusClass}`} />
+          <span class={`status-dot ${statusClass}`} role="img" aria-label={`Connection: ${connState}`} />
           <h1>TermPilot</h1>
         </div>
         <div class="header-actions">
           <button
-            class={`mode-btn ${mode === 'independent' ? 'mode-active' : ''}`}
-            onClick={() => setMode('independent')}
-            title="Independent sessions"
+            type="button"
+            class={`mode-btn ${mode === 'shell' ? 'mode-active' : ''}`}
+            aria-pressed={mode === 'shell'}
+            onClick={() => setMode('shell')}
+            title="New terminals on this computer"
           >
             Sessions
           </button>
           <button
-            class={`mode-btn ${mode === 'mirror' ? 'mode-active' : ''}`}
-            onClick={() => { setMode('mirror'); openTmuxPicker(); }}
-            title="Mirror existing terminals (tmux)"
+            type="button"
+            class={`mode-btn ${mode === 'tmux' ? 'mode-active' : ''}`}
+            aria-pressed={mode === 'tmux'}
+            onClick={() => { setMode('tmux'); openTmuxPicker(); }}
+            title="Mirror tmux sessions running on this computer"
           >
             Mirror
           </button>
-          <button class="btn btn-ghost btn-danger" onClick={onLogout}>
+          <button type="button" class="btn btn-ghost btn-danger" onClick={onLogout}>
             Logout
           </button>
         </div>
       </div>
 
-      {/* Disconnect banner */}
       {connState !== 'connected' && (
-        <div style={{
-          padding: '8px 16px',
-          background: connState === 'connecting' ? '#2d2a1b' : '#2d1b1b',
-          color: connState === 'connecting' ? '#d29922' : '#f85149',
-          fontSize: '13px',
-          textAlign: 'center',
-          flexShrink: 0,
-          borderBottom: '1px solid var(--border-default)',
-        }}>
-          {connState === 'connecting' ? 'Reconnecting...' : 'Disconnected from server'}
+        <div class={`connection-banner ${connState === 'connecting' ? 'is-connecting' : 'is-disconnected'}`} role="status">
+          {connState === 'connecting' ? 'Reconnecting…' : 'Disconnected from server.'}
+          {connState === 'disconnected' && (
+            <button type="button" class="banner-action" onClick={() => wsClient.reconnectNow()}>
+              Retry now
+            </button>
+          )}
         </div>
       )}
 
-      {/* Tmux session picker overlay */}
+      {notice && (
+        <div class="notice" role="alert">
+          <span>{notice}</span>
+          <button type="button" class="close-btn" aria-label="Dismiss" onClick={() => setNotice(null)}>×</button>
+        </div>
+      )}
+
       {showTmuxPicker && (
-        <div class="tmux-picker">
+        <div class="tmux-picker" role="dialog" aria-label="tmux sessions">
           <div class="tmux-picker-header">
-            <span>tmux Sessions</span>
-            <button onClick={() => setShowTmuxPicker(false)} class="close-btn" aria-label="Close tmux picker">x</button>
+            <span>tmux sessions</span>
+            <button type="button" onClick={() => setShowTmuxPicker(false)} class="close-btn" aria-label="Close">×</button>
           </div>
-          {tmuxUnavailableMsg ? (
-            <div class="tmux-empty">
-              {tmuxUnavailableMsg}
-            </div>
+          {tmuxUnavailable ? (
+            <div class="tmux-empty">{tmuxUnavailable}</div>
           ) : tmuxSessions.length === 0 ? (
             <div class="tmux-empty">
-              No tmux sessions found. Start one with:
+              No tmux sessions found. Start one on the computer with:
               <code>tmux new -s myproject</code>
             </div>
           ) : (
             <div class="tmux-list">
-              {tmuxSessions.map((ts) => {
-                const isAttached = sessions.some((s) => s.id === `tmux:${ts.name}`);
+              {tmuxSessions.map((session) => {
+                const open = tabs.some((tab) => tab.kind === 'tmux' && tab.tmuxName === session.name);
                 return (
                   <button
-                    key={ts.name}
-                    class={`tmux-item ${isAttached ? 'attached' : ''}`}
-                    onClick={() => attachTmux(ts.name)}
+                    type="button"
+                    key={session.name}
+                    class={`tmux-item ${open ? 'attached' : ''}`}
+                    onClick={() => attachTmux(session.name)}
                   >
-                    <span class="tmux-name">{ts.name}</span>
+                    <span class="tmux-name">{session.name}</span>
                     <span class="tmux-meta">
-                      {ts.windows} window{ts.windows !== 1 ? 's' : ''}
-                      {isAttached ? ' (attached)' : ''}
+                      {session.windows} window{session.windows === 1 ? '' : 's'}
+                      {open ? ' (open)' : ''}
                     </span>
                   </button>
                 );
               })}
             </div>
           )}
-          <button
-            class="tmux-refresh"
-            onClick={() => wsClient.send({ type: 'tmux_list' })}
-          >
+          <button type="button" class="tmux-refresh" onClick={() => wsClient.send({ type: 'tmux_list' })}>
             Refresh
           </button>
         </div>
       )}
 
-      <div class="session-tabs" role="tablist" aria-label="Terminal sessions">
-        {sessions.map((s) => (
-          <button
-            key={s.id}
-            class={`session-tab ${s.id === activeSessionId ? 'active' : ''} ${s.mode === 'mirror' ? 'mirror-tab' : ''}`}
-            onClick={() => setActiveSessionId(s.id)}
-          >
-            {s.label}
+      <div class="session-tabs" role="tablist" aria-label="Terminals">
+        {tabs.map((tab) => (
+          <div key={tab.key} class={`session-tab ${tab.key === activeKey ? 'active' : ''} ${tab.kind === 'tmux' ? 'mirror-tab' : ''}`}>
             <button
-              class="close-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                destroySession(s);
-              }}
+              type="button"
+              role="tab"
+              class="session-tab-label"
+              aria-selected={tab.key === activeKey}
+              onClick={() => activate(tab.key)}
             >
-              x
+              {tab.label}
             </button>
-          </button>
+            <button
+              type="button"
+              class="close-btn"
+              aria-label={`Close ${tab.label}`}
+              onClick={() => wsClient.send({ type: 'close', sessionId: tab.sessionId })}
+            >
+              ×
+            </button>
+          </div>
         ))}
-        {mode === 'independent' && (
-          <button class="new-tab-btn" onClick={createSession} title="New terminal" aria-label="Create new terminal session">
-            +
-          </button>
-        )}
-        {mode === 'mirror' && (
-          <button class="new-tab-btn" onClick={openTmuxPicker} title="Attach to tmux session" aria-label="Attach to tmux session">
-            +
-          </button>
-        )}
+        <button
+          type="button"
+          class="new-tab-btn"
+          onClick={mode === 'shell' ? () => wsClient.send({ type: 'create', ...newTerminalSize() }) : openTmuxPicker}
+          aria-label={mode === 'shell' ? 'New terminal' : 'Attach to a tmux session'}
+          title={mode === 'shell' ? 'New terminal' : 'Attach to a tmux session'}
+        >
+          +
+        </button>
       </div>
 
       <div class="terminal-wrapper">
-        {sessions.map((s) => (
-          <div
-            key={s.id}
-            style={{
-              display: s.id === activeSessionId ? 'block' : 'none',
-              width: '100%',
-              height: '100%',
-            }}
-          >
+        {tabs.map((tab) => (
+          <div key={tab.key} class="terminal-slot" hidden={tab.key !== activeKey}>
             <TerminalInstance
-              ref={(ref) => {
-                if (ref) termRefs.current.set(s.id, ref);
-                else termRefs.current.delete(s.id);
+              ref={(handle: TerminalHandle | null) => {
+                if (handle) handles.current.set(tab.key, handle);
+                else handles.current.delete(tab.key);
               }}
-              sessionId={s.id}
+              sessionId={tab.sessionId}
               wsClient={wsClient}
-              visible={s.id === activeSessionId}
+              visible={tab.key === activeKey}
+              onInput={(data) => sendKeystroke(tab, data)}
+              onResize={(size) => wsClient.send({ type: 'resize', sessionId: tab.sessionId, ...size })}
+              onReady={(size) => {
+                const current = tabsRef.current.find((t) => t.key === tab.key);
+                if (current && !current.reattaching) attach(current, size ?? undefined);
+              }}
             />
           </div>
         ))}
       </div>
 
-      <VoiceInput onCommand={handleVoiceCommand} />
-      <ExtraKeys onKey={handleExtraKey} onScrollUp={handleScrollUp} onScrollDown={handleScrollDown} />
+      {activeTab && <VoiceInput onCommand={onVoiceCommand} />}
+      <ExtraKeys
+        modifiers={modifiers}
+        onToggleModifier={(name) => setModifiers((current) => ({ ...current, [name]: !current[name] }))}
+        onKey={onExtraKey}
+        onPage={onPage}
+      />
     </div>
   );
 }

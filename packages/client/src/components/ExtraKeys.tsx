@@ -1,103 +1,68 @@
-import { useState, useCallback } from 'preact/hooks';
+import type { Modifiers } from '../services/keys.js';
 
-interface ExtraKeysProps {
-  onKey: (data: string) => void;
-  onScrollUp?: () => void;
-  onScrollDown?: () => void;
-}
+type ModifierName = keyof Modifiers;
 
-interface KeyDef {
-  label: string;
-  data: string;
-  toggle?: boolean;
-  action?: string;
-}
+type KeyDef =
+  | { kind: 'key'; label: string; ariaLabel: string; data: string }
+  | { kind: 'modifier'; label: string; modifier: ModifierName }
+  | { kind: 'page'; label: string; ariaLabel: string; direction: -1 | 1 };
 
 const KEYS: KeyDef[] = [
-  { label: 'Esc', data: '\x1b' },
-  { label: 'Tab', data: '\t' },
-  { label: 'Ctrl', data: '', toggle: true },
-  { label: 'Alt', data: '', toggle: true },
-  { label: '\u2191', data: '\x1b[A' },  // Up arrow
-  { label: '\u2193', data: '\x1b[B' },  // Down arrow
-  { label: '\u2190', data: '\x1b[D' },  // Left arrow
-  { label: '\u2192', data: '\x1b[C' },  // Right arrow
-  { label: '|', data: '|' },
-  { label: '/', data: '/' },
-  { label: '~', data: '~' },
-  { label: '-', data: '-' },
-  { label: '.', data: '.' },
-  { label: 'PgUp', data: '', action: 'scrollUp' },
-  { label: 'PgDn', data: '', action: 'scrollDown' },
+  { kind: 'key', label: 'Esc', ariaLabel: 'Escape', data: '\x1b' },
+  { kind: 'key', label: 'Tab', ariaLabel: 'Tab', data: '\t' },
+  { kind: 'modifier', label: 'Ctrl', modifier: 'ctrl' },
+  { kind: 'modifier', label: 'Alt', modifier: 'alt' },
+  { kind: 'key', label: '↑', ariaLabel: 'Up arrow', data: '\x1b[A' },
+  { kind: 'key', label: '↓', ariaLabel: 'Down arrow', data: '\x1b[B' },
+  { kind: 'key', label: '←', ariaLabel: 'Left arrow', data: '\x1b[D' },
+  { kind: 'key', label: '→', ariaLabel: 'Right arrow', data: '\x1b[C' },
+  { kind: 'key', label: '|', ariaLabel: 'Pipe', data: '|' },
+  { kind: 'key', label: '/', ariaLabel: 'Slash', data: '/' },
+  { kind: 'key', label: '~', ariaLabel: 'Tilde', data: '~' },
+  { kind: 'key', label: '-', ariaLabel: 'Dash', data: '-' },
+  { kind: 'key', label: '.', ariaLabel: 'Dot', data: '.' },
+  { kind: 'page', label: 'PgUp', ariaLabel: 'Page up', direction: -1 },
+  { kind: 'page', label: 'PgDn', ariaLabel: 'Page down', direction: 1 },
 ];
 
-export function ExtraKeys({ onKey, onScrollUp, onScrollDown }: ExtraKeysProps) {
-  const [ctrlActive, setCtrlActive] = useState(false);
-  const [altActive, setAltActive] = useState(false);
+interface ExtraKeysProps {
+  modifiers: Modifiers;
+  onToggleModifier: (modifier: ModifierName) => void;
+  /** A key the phone keyboard lacks; modifiers are applied by the receiver, as for typed keys. */
+  onKey: (data: string) => void;
+  onPage: (direction: -1 | 1) => void;
+}
 
-  const handleKey = useCallback(
-    (key: KeyDef) => {
-      if (key.action === 'scrollUp') {
-        onScrollUp?.();
-        return;
-      }
-      if (key.action === 'scrollDown') {
-        onScrollDown?.();
-        return;
-      }
-      if (key.label === 'Ctrl') {
-        setCtrlActive((v) => !v);
-        return;
-      }
-      if (key.label === 'Alt') {
-        setAltActive((v) => !v);
-        return;
-      }
-
-      let data = key.data;
-
-      if (ctrlActive && data.length === 1) {
-        const code = data.toUpperCase().charCodeAt(0);
-        if (code >= 65 && code <= 90) {
-          // Ctrl+A=0x01 ... Ctrl+Z=0x1A
-          data = String.fromCharCode(code - 64);
-        } else {
-          // Ctrl+[ = Escape, Ctrl+] = 0x1D, Ctrl+\ = 0x1C, Ctrl+^ = 0x1E
-          const special: Record<string, string> = { '[': '\x1b', ']': '\x1d', '\\': '\x1c', '^': '\x1e', '/': '\x1f' };
-          if (special[data]) data = special[data];
-        }
-        setCtrlActive(false);
-      }
-
-      if (altActive) {
-        data = '\x1b' + data;
-        setAltActive(false);
-      }
-
-      onKey(data);
-    },
-    [ctrlActive, altActive, onKey, onScrollUp, onScrollDown]
-  );
-
+/** Keys missing from phone keyboards. Ctrl and Alt arm for the next keystroke, typed or tapped. */
+export function ExtraKeys({ modifiers, onToggleModifier, onKey, onPage }: ExtraKeysProps) {
   return (
-    <div class="extra-keys" role="toolbar" aria-label="Terminal extra keys">
+    <div class="extra-keys" role="toolbar" aria-label="Extra keys">
       {KEYS.map((key) => {
-        const isActive =
-          (key.label === 'Ctrl' && ctrlActive) ||
-          (key.label === 'Alt' && altActive);
-
-        const ariaLabel = key.action === 'scrollUp' ? 'Page Up' :
-          key.action === 'scrollDown' ? 'Page Down' :
-          key.toggle ? `${key.label} modifier${isActive ? ' (active)' : ''}` :
-          `${key.label} key`;
-
+        if (key.kind === 'modifier') {
+          const active = modifiers[key.modifier];
+          return (
+            <button
+              key={key.label}
+              type="button"
+              class={`extra-key ${active ? 'toggle-active' : ''}`}
+              aria-pressed={active}
+              aria-label={`${key.label} modifier`}
+              // Keep focus (and the phone keyboard) on the terminal.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => onToggleModifier(key.modifier)}
+            >
+              {key.label}
+            </button>
+          );
+        }
         return (
           <button
             key={key.label}
-            class={`extra-key ${isActive ? 'toggle-active' : ''} ${key.action ? 'scroll-key' : ''}`}
-            onClick={() => handleKey(key)}
-            aria-label={ariaLabel}
-            aria-pressed={key.toggle ? isActive : undefined}
+            type="button"
+            class={`extra-key ${key.kind === 'page' ? 'scroll-key' : ''}`}
+            aria-label={key.ariaLabel}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => (key.kind === 'page' ? onPage(key.direction) : onKey(key.data))}
           >
             {key.label}
           </button>

@@ -1,718 +1,380 @@
-import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { WebSocketServer, WebSocket } from 'ws';
-import { URL } from 'node:url';
-import { readFile, access } from 'node:fs/promises';
-import { join, extname, resolve } from 'node:path';
+import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { Duplex } from 'node:stream';
 import { randomBytes } from 'node:crypto';
+import { WebSocketServer, type WebSocket, type RawData } from 'ws';
+import { PROTOCOL_VERSION, TERMINAL_LIMITS, WS_CLOSE } from '@termpilot/shared';
+import { ClientMessageSchema, describeValidationError } from '@termpilot/shared/schemas';
+import { AuthService, RateLimiter, type AuthServiceOptions } from './auth/auth-service.js';
 import { PtyManager } from './terminal/pty-manager.js';
-import { TmuxManager, type AttachResult } from './terminal/tmux-manager.js';
-import { AuthService, RateLimiter } from './auth/auth-service.js';
-import {
-  CreateSessionSchema, InputSchema, ResizeSchema, DestroySessionSchema,
-  TmuxAttachSchema, TmuxDetachSchema, TmuxCreateSchema, TmuxKillSchema, TmuxWindowsSchema,
-} from '@termpilot/shared';
+import { SessionRegistry } from './terminal/session-registry.js';
+import { TmuxManager } from './terminal/tmux-manager.js';
+import { shellSpawnSpec } from './terminal/shell.js';
+import { HostGuard, clientAddress, defaultAllowedHosts, isWildcardHost, machineHostnames } from './http/request-guard.js';
+import { HttpError, createApiRouter, sendJson } from './http/api.js';
+import { createMissingClientHandler, createStaticHandler, resolveClientDist } from './http/static-files.js';
+import { ClientConnection, DEFAULT_FLOW_CONTROL, type FlowControlOptions } from './ws/client-connection.js';
+import { handleMessage } from './ws/message-handler.js';
+import { debug } from './log.js';
+
+export const SERVER_DEFAULTS = {
+  host: '127.0.0.1',
+  maxSessions: 20,
+  /** Authenticated connections (devices) at once. */
+  maxConnections: 20,
+  /**
+   * Connections that have not authenticated yet are limited separately, per client
+   * address and in total, so idle sockets from one source cannot take the slots
+   * the owner's devices need.
+   */
+  maxPendingPerAddress: 4,
+  maxPendingTotal: 64,
+  maxReplayChars: 100 * 1024,
+  authTimeoutMs: 10_000,
+  heartbeatMs: 30_000,
+  maintenanceMs: 60_000,
+  /** Failed logins allowed per client address per window. */
+  login: { maxFailures: 5, windowMs: 15 * 60 * 1000 },
+  /** Failed WebSocket authentications (bad or expired tokens) per client address per window. */
+  wsAuth: { maxFailures: 10, windowMs: 60 * 1000 },
+} as const;
+
+/**
+ * Largest frame a well-behaved client can send: an input message at the maximum
+ * data length where every character needed a six-byte JSON escape (\u0000).
+ */
+const MAX_WS_PAYLOAD = TERMINAL_LIMITS.maxInputLength * 6 + 1024;
+
+const SHUTDOWN_GRACE_MS = 1_000;
+const MAX_PORT = 65_535;
+
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self'",
+  // xterm.js positions its DOM with inline styles.
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "font-src 'self'",
+  "connect-src 'self'",
+  "worker-src 'self'",
+  "manifest-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join('; ');
+
+const SECURITY_HEADERS: Record<string, string> = {
+  'Content-Security-Policy': CONTENT_SECURITY_POLICY,
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer',
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+  'Permissions-Policy': 'microphone=(self), camera=(), geolocation=()',
+};
 
 export interface ServerOptions {
   port: number;
   host?: string;
+  /** How many following ports to try when `port` is taken. */
+  portRetries?: number;
+  /** Extra hostnames (or `.domain` suffixes) browsers may use to reach the server. */
+  allowedHosts?: string[];
+  /** Read the client address from CF-Connecting-IP on loopback connections (tunnel mode). */
+  trustTunnelProxy?: boolean;
   maxSessions?: number;
-  defaultShell?: string;
+  maxConnections?: number;
+  /** Shell to spawn for new terminals; defaults to the user's login shell. */
+  shell?: string;
+  auth?: AuthServiceOptions;
+  /** Directory of the built client. Defaults to the packaged or monorepo build. */
+  clientDist?: string;
+  maintenanceMs?: number;
+  authTimeoutMs?: number;
+  flowControl?: FlowControlOptions;
 }
 
 export interface TermPilotServer {
-  port: number;
-  auth: AuthService;
+  readonly port: number;
+  readonly host: string;
+  readonly auth: AuthService;
+  /** Accept requests for another hostname, e.g. the tunnel's public hostname once known. */
+  allowHost(hostname: string): void;
   close(): Promise<void>;
 }
 
-const MAX_WS_CONNECTIONS = 20;
-const MAX_WS_PAYLOAD = 64 * 1024; // 64KB
-const LOGIN_TIMEOUT_MS = 5000;
-const AUTH_TIMEOUT_MS = 10000;
+export function listen(server: Server, port: number, host: string, retries: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    let attempt = 0;
+    const tryPort = (candidate: number) => {
+      const onError = (err: NodeJS.ErrnoException) => {
+        server.off('listening', onListening);
+        if (err.code === 'EADDRINUSE' && attempt < retries && candidate !== 0 && candidate < MAX_PORT) {
+          attempt++;
+          tryPort(candidate + 1);
+        } else {
+          reject(err);
+        }
+      };
+      const onListening = () => {
+        server.off('error', onError);
+        const address = server.address();
+        resolve(typeof address === 'object' && address ? address.port : candidate);
+      };
+      server.once('error', onError);
+      server.once('listening', onListening);
+      server.listen(candidate, host);
+    };
+    tryPort(port);
+  });
+}
 
-function safeSend(ws: WebSocket, data: string): void {
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(data);
+/** The API keeps working without a built client, so `pnpm dev` (Vite serves the client) still runs. */
+function staticHandler(clientDist: string | undefined) {
+  if (clientDist) return createStaticHandler(clientDist);
+  try {
+    return createStaticHandler(resolveClientDist());
+  } catch (err) {
+    const reason = (err as Error).message;
+    console.warn(`Warning: ${reason}`);
+    return createMissingClientHandler(reason);
   }
 }
 
+function rejectUpgrade(socket: Duplex, status: number, reason: string): void {
+  socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+}
 
 export async function createServer(opts: ServerOptions): Promise<TermPilotServer> {
-  const auth = new AuthService();
-  const loginLimiter = new RateLimiter({ maxAttempts: 5, windowMs: 15 * 60 * 1000 });
-  const wsAuthLimiter = new RateLimiter({ maxAttempts: 10, windowMs: 60 * 1000 }); // #3: WS auth rate limit
-  const ptyManager = new PtyManager({
-    maxSessions: opts.maxSessions ?? 20,
-    idleTimeoutMs: 5 * 60 * 1000,
-    defaultShell: opts.defaultShell,
+  const host = opts.host ?? SERVER_DEFAULTS.host;
+  const maxConnections = opts.maxConnections ?? SERVER_DEFAULTS.maxConnections;
+  const authTimeoutMs = opts.authTimeoutMs ?? SERVER_DEFAULTS.authTimeoutMs;
+  const trustTunnelProxy = opts.trustTunnelProxy ?? false;
+
+  const auth = new AuthService(opts.auth);
+  const loginLimiter = new RateLimiter(SERVER_DEFAULTS.login);
+  const wsAuthLimiter = new RateLimiter(SERVER_DEFAULTS.wsAuth);
+  const ptys = new PtyManager({
+    maxProcesses: opts.maxSessions ?? SERVER_DEFAULTS.maxSessions,
+    maxReplayChars: SERVER_DEFAULTS.maxReplayChars,
   });
+  const sessions = new SessionRegistry(ptys);
+  const tmux = new TmuxManager();
+  const shellSpec = () => shellSpawnSpec(opts.shell);
+  const guard = new HostGuard(
+    [...defaultAllowedHosts(host), ...(opts.allowedHosts ?? [])],
+    isWildcardHost(host) ? machineHostnames : undefined,
+  );
+  const addressOf = (req: IncomingMessage) => clientAddress(req, trustTunnelProxy);
+  const connections = new Set<ClientConnection>();
+  const pendingByAddress = new Map<string, number>();
+  const changePending = (address: string, delta: number) => {
+    const count = (pendingByAddress.get(address) ?? 0) + delta;
+    if (count > 0) pendingByAddress.set(address, count);
+    else pendingByAddress.delete(address);
+  };
+  const authenticatedCount = () => [...connections].filter((c) => c.authenticated).length;
+  const pendingTotal = () => [...pendingByAddress.values()].reduce((sum, count) => sum + count, 0);
 
-  const tmuxManager = new TmuxManager();
-  let activeConnections = 0;
+  /** End connections whose login is no longer valid, and terminals whose owner has no login left. */
+  const enforceLoginLifetimes = () => {
+    auth.cleanExpiredSessions();
+    for (const conn of connections) {
+      if (conn.token && !auth.validateSession(conn.token)) {
+        conn.close(WS_CLOSE.sessionExpired, 'Login expired');
+      }
+    }
+    sessions.reapInactiveOwners((owner) => auth.hasActiveSession(owner));
+  };
 
-  // #1: CORS origin allowlist — built dynamically from server's own addresses
-  const allowedOrigins = new Set<string>();
-  const serverHost = opts.host || '127.0.0.1';
-
-  function registerOrigin(origin: string): void {
-    allowedOrigins.add(origin.toLowerCase());
-  }
-
-  function isOriginAllowed(origin: string): boolean {
-    if (!origin) return true; // Same-origin requests have no Origin header
-    return allowedOrigins.has(origin.toLowerCase());
-  }
-
-  // #5: CSRF token — generated per server instance, embedded in HTML, required on POST
-  const csrfToken = randomBytes(32).toString('hex');
-
-  // Track which sessions belong to which WebSocket
-  const wsSessionMap = new Map<WebSocket, Set<string>>();
-  const wsMirrorMap = new Map<WebSocket, Map<string, AttachResult>>();
-  const wsTokenMap = new Map<WebSocket, string>();
+  const api = createApiRouter({
+    auth,
+    loginLimiter,
+    csrfToken: randomBytes(32).toString('hex'),
+    clientAddress: addressOf,
+    onLogout: enforceLoginLifetimes,
+  });
+  const serveStatic = staticHandler(opts.clientDist);
 
   const httpServer = createHttpServer((req: IncomingMessage, res: ServerResponse) => {
-    const origin = req.headers.origin || '';
+    for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
 
-    // Security headers
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'DENY');
-    res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; connect-src 'self' wss: ws:; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:");
-
-    // #1: CORS with explicit allowlist
-    if (origin && isOriginAllowed(origin)) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Vary', 'Origin');
-    }
-
-    if (req.method === 'OPTIONS') {
-      if (origin && isOriginAllowed(origin)) {
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-CSRF-Token');
-      }
-      res.writeHead(204);
-      res.end();
+    if (!guard.check(req)) {
+      sendJson(res, 403, { error: 'Host or origin not allowed. Use --allowed-hosts to permit it.' });
       return;
     }
 
-    // #4: Remove uptime from health, keep it minimal
-    if (req.url === '/health' && req.method === 'GET') {
-      handleHealth(res, ptyManager);
-      return;
-    }
-
-    // #5: CSRF token endpoint — serves the token for the client to embed
-    if (req.url === '/api/auth/csrf' && req.method === 'GET') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ csrfToken }));
-      return;
-    }
-
-    if (req.url === '/api/auth/login' && req.method === 'POST') {
-      // #5: Validate CSRF token on login
-      const reqCsrf = req.headers['x-csrf-token'] as string | undefined;
-      if (reqCsrf !== csrfToken) {
-        res.writeHead(403, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Invalid CSRF token' }));
-        return;
-      }
-      handleLogin(req, res, auth, loginLimiter);
-      return;
-    }
-
-    if (req.url === '/api/auth/logout' && req.method === 'POST') {
-      // #2: Validate token before allowing logout
-      // #5: Validate CSRF on logout
-      const reqCsrf = req.headers['x-csrf-token'] as string | undefined;
-      if (reqCsrf !== csrfToken) {
-        res.writeHead(403, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Invalid CSRF token' }));
-        return;
-      }
-      handleLogout(req, res, auth);
-      return;
-    }
-
-    serveStatic(req, res);
+    const { pathname } = new URL(req.url ?? '/', 'http://localhost');
+    const handler = api(pathname, req.method ?? 'GET');
+    const run = handler ? handler(req, res) : serveStatic(req, res);
+    Promise.resolve(run).catch((err: unknown) => {
+      if (res.headersSent || res.destroyed) return;
+      if (err instanceof HttpError) sendJson(res, err.status, { error: err.message });
+      else sendJson(res, 500, { error: 'Internal server error' });
+    });
   });
 
-  const wss = new WebSocketServer({
-    server: httpServer,
-    path: '/ws',
-    maxPayload: MAX_WS_PAYLOAD,
-    perMessageDeflate: true,  // Compress WebSocket messages (terminal output is highly compressible)
-    verifyClient: (_info, done) => {
-      if (activeConnections >= MAX_WS_CONNECTIONS) {
-        done(false, 503, 'Too many connections');
-        return;
-      }
-      done(true);
-    },
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_WS_PAYLOAD, perMessageDeflate: true });
+
+  httpServer.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    const { pathname } = new URL(req.url ?? '/', 'http://localhost');
+    if (pathname !== '/ws') return rejectUpgrade(socket, 404, 'Not Found');
+    if (!guard.check(req)) return rejectUpgrade(socket, 403, 'Forbidden');
+    if ((pendingByAddress.get(addressOf(req)) ?? 0) >= SERVER_DEFAULTS.maxPendingPerAddress) {
+      return rejectUpgrade(socket, 429, 'Too Many Requests');
+    }
+    if (pendingTotal() >= SERVER_DEFAULTS.maxPendingTotal) {
+      return rejectUpgrade(socket, 503, 'Service Unavailable');
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
   });
 
-  wss.on('connection', (ws: WebSocket, _req: IncomingMessage) => {
-    activeConnections++;
-    wsSessionMap.set(ws, new Set());
-    let authenticated = false;
-    const clientIp = _req.socket.remoteAddress || 'unknown';
+  wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
+    const conn = new ClientConnection(ws, opts.flowControl ?? DEFAULT_FLOW_CONTROL);
+    connections.add(conn);
+    const ip = addressOf(req);
+    changePending(ip, 1);
+    debug(`ws open from ${ip}`);
+    let pending = true;
+    const leavePending = () => {
+      if (!pending) return;
+      pending = false;
+      changePending(ip, -1);
+    };
 
     const authTimer = setTimeout(() => {
-      if (!authenticated) {
-        safeSend(ws, JSON.stringify({ type: 'error', message: 'Authentication timeout' }));
-        ws.close(4401, 'Auth timeout');
+      if (!conn.authenticated) conn.close(WS_CLOSE.authTimeout, 'Authentication timeout');
+    }, authTimeoutMs);
+
+    // Pings keep NAT/proxy mappings alive; each pong shows the user is still here.
+    let alive = true;
+    const heartbeat = setInterval(() => {
+      if (!alive) {
+        ws.terminate();
+        return;
       }
-    }, AUTH_TIMEOUT_MS);
+      alive = false;
+      ws.ping();
+    }, SERVER_DEFAULTS.heartbeatMs);
+    ws.on('pong', () => {
+      alive = true;
+      if (conn.token) auth.touchSession(conn.token);
+    });
 
-    const pingInterval = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) ws.ping();
-    }, 30_000);
+    // Messages are handled strictly in order, even when one awaits tmux.
+    let queue = Promise.resolve();
 
-    ws.on('message', (raw: Buffer) => {
-      let msg: Record<string, unknown>;
+    ws.on('message', (raw: RawData, isBinary: boolean) => {
+      if (isBinary) {
+        conn.send({ type: 'error', message: 'Binary frames are not supported' });
+        return;
+      }
+      let json: unknown;
       try {
-        msg = JSON.parse(raw.toString());
+        json = JSON.parse(raw.toString());
       } catch {
-        sendError(ws, 'Invalid JSON message');
+        conn.send({ type: 'error', message: 'Invalid JSON message' });
         return;
       }
+      const parsed = ClientMessageSchema.safeParse(json);
+      if (!parsed.success) {
+        conn.send({ type: 'error', message: `Invalid message: ${describeValidationError(parsed.error)}` });
+        return;
+      }
+      const message = parsed.data;
 
-      if (!authenticated) {
-        if (msg.type === 'auth' && typeof msg.token === 'string') {
-          // #3: Rate limit WS auth attempts by IP
-          if (!wsAuthLimiter.isAllowed(clientIp)) {
-            safeSend(ws, JSON.stringify({ type: 'auth_failed', message: 'Too many auth attempts' }));
-            ws.close(4429, 'Rate limited');
-            return;
-          }
-
-          const session = auth.validateSession(msg.token);
-          if (session) {
-            authenticated = true;
-            clearTimeout(authTimer);
-            wsTokenMap.set(ws, msg.token);
-            safeSend(ws, JSON.stringify({ type: 'auth_ok', username: session.username }));
-          } else {
-            safeSend(ws, JSON.stringify({ type: 'auth_failed', message: 'Invalid or expired token' }));
-            ws.close(4401, 'Invalid token');
-          }
-        } else {
-          safeSend(ws, JSON.stringify({ type: 'error', message: 'Send auth message first' }));
+      if (!conn.authenticated) {
+        if (message.type !== 'auth') {
+          conn.send({ type: 'error', message: 'Send an auth message first' });
+          return;
         }
+        if (!wsAuthLimiter.tryBegin(ip)) {
+          conn.send({ type: 'auth_failed', reason: 'rate_limited', message: 'Too many attempts. Try again later.' });
+          conn.close(WS_CLOSE.rateLimited, 'Rate limited');
+          return;
+        }
+        if (message.protocol !== PROTOCOL_VERSION) {
+          wsAuthLimiter.succeeded(ip); // an outdated page, not a token guess
+          conn.send({ type: 'auth_failed', reason: 'protocol_mismatch', message: 'This page is out of date. Reload to update.' });
+          conn.close(WS_CLOSE.protocolMismatch, 'Protocol mismatch');
+          return;
+        }
+        const login = auth.validateSession(message.token);
+        if (login) wsAuthLimiter.succeeded(ip);
+        if (!login) {
+          conn.send({ type: 'auth_failed', reason: 'invalid_token', message: 'Invalid or expired login' });
+          conn.close(WS_CLOSE.unauthorized, 'Invalid token');
+          return;
+        }
+        clearTimeout(authTimer);
+        leavePending();
+        if (authenticatedCount() >= maxConnections) {
+          conn.send({ type: 'error', message: `Too many devices connected (maximum ${maxConnections}).` });
+          conn.close(WS_CLOSE.tryAgainLater, 'Too many connections');
+          return;
+        }
+        conn.token = message.token;
+        conn.username = login.username;
+        auth.touchSession(message.token);
+        conn.send({ type: 'auth_ok', username: login.username, protocol: PROTOCOL_VERSION });
+        debug(`ws authenticated from ${ip}`);
         return;
       }
 
-      const token = wsTokenMap.get(ws);
-      if (token) auth.touchSession(token);
-
-      handleMessage(ws, msg, ptyManager, tmuxManager, wsSessionMap, wsMirrorMap);
+      if (message.type === 'auth') {
+        conn.send({ type: 'error', message: 'Already authenticated' });
+        return;
+      }
+      auth.touchSession(conn.token!);
+      queue = queue.then(() => handleMessage(conn, message, { sessions, tmux, shellSpec }));
     });
 
-    ws.on('close', () => {
-      activeConnections--;
-      clearInterval(pingInterval);
+    ws.on('close', (code: number, reason: Buffer) => {
+      debug(`ws closed from ${ip}: code ${code}${reason.length ? ` (${reason.toString()})` : ''}`);
       clearTimeout(authTimer);
-
-      const sessions = wsSessionMap.get(ws);
-      if (sessions) {
-        for (const sid of [...sessions]) {
-          try { ptyManager.destroySession(sid); } catch {}
-        }
-      }
-      wsSessionMap.delete(ws);
-
-      const mirrors = wsMirrorMap.get(ws);
-      if (mirrors) {
-        for (const [, handle] of mirrors) handle.cleanup();
-      }
-      wsMirrorMap.delete(ws);
-      wsTokenMap.delete(ws);
+      leavePending();
+      clearInterval(heartbeat);
+      connections.delete(conn);
+      sessions.disconnect(conn);
+      conn.dispose();
     });
 
-    ws.on('error', (err) => {
-      console.error(`[ws] Connection error from ${clientIp}:`, err.message);
+    ws.on('error', (err: Error) => {
+      // `close` follows and performs the cleanup.
+      debug(`ws error from ${ip}: ${err.message}`);
     });
   });
 
-  const maxPortAttempts = 10;
-  let currentPort = opts.port;
+  const maintenance = setInterval(enforceLoginLifetimes, opts.maintenanceMs ?? SERVER_DEFAULTS.maintenanceMs);
+  maintenance.unref();
 
-  return new Promise<TermPilotServer>((resolve, reject) => {
-    function tryListen() {
-      httpServer.removeAllListeners('error');
-      httpServer.on('error', (err: NodeJS.ErrnoException) => {
-        if (err.code === 'EADDRINUSE' && currentPort - opts.port < maxPortAttempts) {
-          currentPort++;
-          console.log(`  Port ${currentPort - 1} in use, trying ${currentPort}...`);
-          tryListen();
-        } else if (err.code === 'EADDRINUSE') {
-          console.error(`\nError: Ports ${opts.port}-${currentPort} are all in use.`);
-          reject(err);
-        } else {
-          console.error('Server error:', err.message);
-          reject(err);
-        }
-      });
-
-      httpServer.listen(currentPort, serverHost, () => {
-      const addr = httpServer.address();
-      const actualPort = typeof addr === 'object' && addr ? addr.port : opts.port;
-
-      // #1: Register allowed origins based on actual listen address
-      registerOrigin(`http://localhost:${actualPort}`);
-      registerOrigin(`http://127.0.0.1:${actualPort}`);
-      registerOrigin(`http://${serverHost}:${actualPort}`);
-      // When binding to all interfaces (tunnel mode), also allow LAN IPs
-      // The tunnel URL origin will match via same-origin (no Origin header sent)
-      if (serverHost === '0.0.0.0') {
-        registerOrigin(`http://0.0.0.0:${actualPort}`);
-      }
-
-      resolve({
-        port: actualPort,
-        auth,
-        close: async () => {
-          auth.dispose();
-          ptyManager.dispose();
-          ptyManager.destroyAll();
-          for (const client of wss.clients) {
-            safeSend(client as WebSocket, JSON.stringify({ type: 'error', message: 'Server shutting down' }));
-            (client as WebSocket).close(1001, 'Server shutting down');
-          }
-          wss.close();
-          await new Promise<void>((r) => httpServer.close(() => r()));
-        },
-      });
-    });
-    }
-
-    tryListen();
+  const port = await listen(httpServer, opts.port, host, opts.portRetries ?? 0).catch((err) => {
+    clearInterval(maintenance);
+    throw err;
   });
-}
 
-function handleMessage(
-  ws: WebSocket,
-  msg: Record<string, unknown>,
-  ptyManager: PtyManager,
-  tmuxManager: TmuxManager,
-  wsSessionMap: Map<WebSocket, Set<string>>,
-  wsMirrorMap: Map<WebSocket, Map<string, AttachResult>>
-): void {
-  switch (msg.type) {
-    case 'create': handleCreate(ws, msg, ptyManager, wsSessionMap); break;
-    case 'input': handleInput(ws, msg, ptyManager, wsSessionMap, wsMirrorMap); break;
-    case 'resize': handleResize(ws, msg, ptyManager, wsSessionMap, wsMirrorMap); break;
-    case 'destroy': handleDestroy(ws, msg, ptyManager, wsSessionMap); break;
-    case 'list': handleList(ws, ptyManager, wsSessionMap); break;
-    case 'tmux_list': handleTmuxList(ws, tmuxManager); break;
-    case 'tmux_attach': handleTmuxAttach(ws, msg, tmuxManager, wsMirrorMap); break;
-    case 'tmux_detach': handleTmuxDetach(ws, msg, wsMirrorMap); break;
-    case 'tmux_create': handleTmuxCreate(ws, msg, tmuxManager); break;
-    // #7: tmux_kill scoped — only kill sessions you're attached to
-    case 'tmux_kill': handleTmuxKill(ws, msg, tmuxManager, wsMirrorMap); break;
-    case 'tmux_windows': handleTmuxWindows(ws, msg, tmuxManager); break;
-    default: sendError(ws, `Unknown message type: ${msg.type}`);
-  }
-}
+  let closing: Promise<void> | null = null;
 
-function formatZodError(err: { issues: Array<{ path: (string | number)[]; message: string }> }): string {
-  return err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ');
-}
-
-function handleCreate(
-  ws: WebSocket, msg: Record<string, unknown>,
-  ptyManager: PtyManager, wsSessionMap: Map<WebSocket, Set<string>>
-): void {
-  try {
-    const parsed = CreateSessionSchema.safeParse(msg);
-    if (!parsed.success) {
-      sendError(ws, `Invalid create message: ${formatZodError(parsed.error)}`);
-      return;
-    }
-    const { cols, rows } = parsed.data;
-    const session = ptyManager.createSession({ cols, rows });
-    wsSessionMap.get(ws)?.add(session.id);
-
-    ptyManager.onData(session.id, (data) => {
-      safeSend(ws, JSON.stringify({ type: 'output', sessionId: session.id, data }));
-    });
-
-    ptyManager.onExit(session.id, ({ exitCode, signal }) => {
-      wsSessionMap.get(ws)?.delete(session.id);
-      safeSend(ws, JSON.stringify({ type: 'session_destroyed', sessionId: session.id, exitCode, signal }));
-    });
-
-    safeSend(ws, JSON.stringify({ type: 'session_created', sessionId: session.id }));
-  } catch (err) {
-    sendError(ws, (err as Error).message);
-  }
-}
-
-function handleInput(
-  ws: WebSocket, msg: Record<string, unknown>,
-  ptyManager: PtyManager, wsSessionMap: Map<WebSocket, Set<string>>,
-  wsMirrorMap: Map<WebSocket, Map<string, AttachResult>>
-): void {
-  try {
-    const parsed = InputSchema.safeParse(msg);
-    if (!parsed.success) {
-      sendError(ws, `Invalid input: ${formatZodError(parsed.error)}`);
-      return;
-    }
-    const { sessionId, data } = parsed.data;
-
-    const mirror = wsMirrorMap.get(ws)?.get(sessionId);
-    if (mirror) { mirror.pty.write(data); return; }
-
-    if (!wsSessionMap.get(ws)?.has(sessionId)) {
-      sendError(ws, 'Session not found or not owned by this connection');
-      return;
-    }
-    ptyManager.writeToSession(sessionId, data);
-  } catch (err) {
-    sendError(ws, (err as Error).message);
-  }
-}
-
-function handleResize(
-  ws: WebSocket, msg: Record<string, unknown>,
-  ptyManager: PtyManager, wsSessionMap: Map<WebSocket, Set<string>>,
-  wsMirrorMap: Map<WebSocket, Map<string, AttachResult>>
-): void {
-  try {
-    const parsed = ResizeSchema.safeParse(msg);
-    if (!parsed.success) {
-      sendError(ws, `Invalid resize: ${formatZodError(parsed.error)}`);
-      return;
-    }
-    const { sessionId, cols, rows } = parsed.data;
-
-    const mirror = wsMirrorMap.get(ws)?.get(sessionId);
-    if (mirror) { mirror.pty.resize(cols, rows); return; }
-
-    if (!wsSessionMap.get(ws)?.has(sessionId)) {
-      sendError(ws, 'Session not found or not owned by this connection');
-      return;
-    }
-    ptyManager.resizeSession(sessionId, cols, rows);
-  } catch (err) {
-    sendError(ws, (err as Error).message);
-  }
-}
-
-function handleDestroy(
-  ws: WebSocket, msg: Record<string, unknown>,
-  ptyManager: PtyManager, wsSessionMap: Map<WebSocket, Set<string>>
-): void {
-  try {
-    const parsed = DestroySessionSchema.safeParse(msg);
-    if (!parsed.success) {
-      sendError(ws, `Invalid destroy: ${formatZodError(parsed.error)}`);
-      return;
-    }
-    const { sessionId } = parsed.data;
-    if (!wsSessionMap.get(ws)?.has(sessionId)) {
-      sendError(ws, 'Session not found or not owned by this connection');
-      return;
-    }
-    ptyManager.destroySession(sessionId);
-    wsSessionMap.get(ws)?.delete(sessionId);
-    safeSend(ws, JSON.stringify({ type: 'session_destroyed', sessionId }));
-  } catch (err) {
-    sendError(ws, (err as Error).message);
-  }
-}
-
-function handleList(ws: WebSocket, ptyManager: PtyManager, wsSessionMap: Map<WebSocket, Set<string>>): void {
-  const ownedIds = wsSessionMap.get(ws);
-  const sessions = ptyManager.listSessions()
-    .filter((s) => ownedIds?.has(s.id))
-    .map((s) => ({ id: s.id, cols: s.cols, rows: s.rows, alive: s.alive, createdAt: s.createdAt }));
-  safeSend(ws, JSON.stringify({ type: 'session_list', sessions }));
-}
-
-// #4: Health endpoint — no uptime, minimal info
-function handleHealth(res: ServerResponse, ptyManager: PtyManager): void {
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ status: 'ok', activeSessions: ptyManager.listSessions().length }));
-}
-
-async function handleLogin(
-  req: IncomingMessage, res: ServerResponse, auth: AuthService, limiter: RateLimiter
-): Promise<void> {
-  const ip = req.socket.remoteAddress || 'unknown';
-
-  if (!limiter.isAllowed(ip)) {
-    res.writeHead(429, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Too many attempts. Try again later.' }));
-    return;
-  }
-
-  const timeout = setTimeout(() => {
-    if (!res.headersSent) {
-      res.writeHead(408, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Request timeout' }));
-    }
-    req.destroy();
-  }, LOGIN_TIMEOUT_MS);
-
-  let body = '';
-  try {
-    for await (const chunk of req) {
-      body += chunk;
-      if (body.length > 4096) {
-        clearTimeout(timeout);
-        res.writeHead(413, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Request too large' }));
-        return;
-      }
-    }
-  } catch { clearTimeout(timeout); return; }
-
-  clearTimeout(timeout);
-
-  try {
-    const { username, password } = JSON.parse(body);
-    const result = await auth.authenticate(username, password);
-    if (result.success) {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ token: result.token }));
-    } else {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Invalid credentials' }));
-    }
-  } catch {
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Invalid request body' }));
-  }
-}
-
-async function handleLogout(
-  req: IncomingMessage, res: ServerResponse, auth: AuthService
-): Promise<void> {
-  const timeout = setTimeout(() => {
-    if (!res.headersSent) {
-      res.writeHead(408, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Request timeout' }));
-    }
-    req.destroy();
-  }, LOGIN_TIMEOUT_MS);
-
-  let body = '';
-  try {
-    for await (const chunk of req) {
-      body += chunk;
-      if (body.length > 4096) {
-        clearTimeout(timeout);
-        res.writeHead(413, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Request too large' }));
-        return;
-      }
-    }
-  } catch {
-    clearTimeout(timeout);
-    return;
-  }
-
-  clearTimeout(timeout);
-
-  try {
-    const { token } = JSON.parse(body);
-    if (!token || typeof token !== 'string') {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Token required' }));
-      return;
-    }
-    // Verify token is valid before allowing logout (prevents forced logout of others)
-    const session = auth.validateSession(token);
-    if (!session) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Invalid token' }));
-      return;
-    }
-    auth.logout(token);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true }));
-  } catch {
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Invalid request' }));
-  }
-}
-
-// === Mirror mode (tmux) handlers ===
-
-async function handleTmuxList(ws: WebSocket, tmux: TmuxManager): Promise<void> {
-  try {
-    const available = await tmux.isAvailable();
-    if (!available) {
-      safeSend(ws, JSON.stringify({
-        type: 'tmux_sessions',
-        sessions: [],
-        unavailable: true,
-        message: tmux.getAvailabilityMessage(),
-      }));
-      return;
-    }
-    const sessions = await tmux.listSessions();
-    safeSend(ws, JSON.stringify({ type: 'tmux_sessions', sessions }));
-  } catch (err) { sendError(ws, (err as Error).message); }
-}
-
-function handleTmuxAttach(
-  ws: WebSocket, msg: Record<string, unknown>, tmux: TmuxManager,
-  wsMirrorMap: Map<WebSocket, Map<string, AttachResult>>
-): void {
-  try {
-    const parsed = TmuxAttachSchema.safeParse(msg);
-    if (!parsed.success) { sendError(ws, `Invalid tmux_attach: ${formatZodError(parsed.error)}`); return; }
-    const { sessionName, cols, rows } = parsed.data;
-    const mirrorId = `tmux:${sessionName}`;
-
-    let mirrors = wsMirrorMap.get(ws);
-    if (!mirrors) { mirrors = new Map(); wsMirrorMap.set(ws, mirrors); }
-    if (mirrors.has(mirrorId)) { sendError(ws, `Already attached to "${sessionName}"`); return; }
-
-    const handle = tmux.attachSession(sessionName, { cols, rows });
-
-    handle.pty.onData((data: string) => {
-      safeSend(ws, JSON.stringify({ type: 'output', sessionId: mirrorId, data }));
-    });
-
-    handle.pty.onExit(() => {
-      mirrors?.delete(mirrorId);
-      safeSend(ws, JSON.stringify({ type: 'tmux_detached', sessionId: mirrorId, sessionName }));
-    });
-
-    mirrors.set(mirrorId, handle);
-    safeSend(ws, JSON.stringify({ type: 'tmux_attached', sessionId: mirrorId, sessionName }));
-  } catch (err) { sendError(ws, (err as Error).message); }
-}
-
-function handleTmuxDetach(
-  ws: WebSocket, msg: Record<string, unknown>,
-  wsMirrorMap: Map<WebSocket, Map<string, AttachResult>>
-): void {
-  const parsed = TmuxDetachSchema.safeParse(msg);
-  if (!parsed.success) { sendError(ws, `Invalid tmux_detach: ${formatZodError(parsed.error)}`); return; }
-  const { sessionName } = parsed.data;
-  const mirrorId = `tmux:${sessionName}`;
-  const mirrors = wsMirrorMap.get(ws);
-  const handle = mirrors?.get(mirrorId);
-  if (handle) {
-    handle.cleanup(); mirrors?.delete(mirrorId);
-    safeSend(ws, JSON.stringify({ type: 'tmux_detached', sessionId: mirrorId, sessionName }));
-  } else {
-    sendError(ws, `Not attached to "${sessionName}"`);
-  }
-}
-
-async function handleTmuxCreate(ws: WebSocket, msg: Record<string, unknown>, tmux: TmuxManager): Promise<void> {
-  try {
-    const parsed = TmuxCreateSchema.safeParse(msg);
-    if (!parsed.success) { sendError(ws, `Invalid tmux_create: ${formatZodError(parsed.error)}`); return; }
-    const { name } = parsed.data;
-    await tmux.createSession(name);
-    safeSend(ws, JSON.stringify({ type: 'tmux_created', name }));
-  } catch (err) { sendError(ws, (err as Error).message); }
-}
-
-// #7: tmux_kill requires the requesting WS to be attached to that session
-async function handleTmuxKill(
-  ws: WebSocket, msg: Record<string, unknown>, tmux: TmuxManager,
-  wsMirrorMap: Map<WebSocket, Map<string, AttachResult>>
-): Promise<void> {
-  try {
-    const parsed = TmuxKillSchema.safeParse(msg);
-    if (!parsed.success) { sendError(ws, `Invalid tmux_kill: ${formatZodError(parsed.error)}`); return; }
-    const { name } = parsed.data;
-    const mirrorId = `tmux:${name}`;
-
-    // Clean up all attached clients
-    for (const [, mirrors] of wsMirrorMap) {
-      const handle = mirrors.get(mirrorId);
-      if (handle) { handle.cleanup(); mirrors.delete(mirrorId); }
-    }
-    await tmux.killSession(name);
-    safeSend(ws, JSON.stringify({ type: 'tmux_killed', name }));
-  } catch (err) { sendError(ws, (err as Error).message); }
-}
-
-async function handleTmuxWindows(ws: WebSocket, msg: Record<string, unknown>, tmux: TmuxManager): Promise<void> {
-  try {
-    const parsed = TmuxWindowsSchema.safeParse(msg);
-    if (!parsed.success) { sendError(ws, `Invalid tmux_windows: ${formatZodError(parsed.error)}`); return; }
-    const { sessionName } = parsed.data;
-    const windows = await tmux.getSessionWindows(sessionName);
-    safeSend(ws, JSON.stringify({ type: 'tmux_windows', sessionName, windows }));
-  } catch (err) { sendError(ws, (err as Error).message); }
-}
-
-function sendError(ws: WebSocket, message: string, sessionId?: string): void {
-  safeSend(ws, JSON.stringify({ type: 'error', message: message.replace(/\/.*\//g, '[path]'), sessionId }));
-}
-
-const MIME_TYPES: Record<string, string> = {
-  '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css',
-  '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.webmanifest': 'application/manifest+json',
-};
-
-// Resolve client dist — works in both monorepo dev and published npm layout
-import { statSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-
-function resolveClientDist(): string {
-  const thisFile = fileURLToPath(import.meta.url);
-  const thisDir = join(thisFile, '..');
-
-  // Try multiple possible locations
-  const candidates = [
-    resolve(thisDir, 'client'),                        // Published: dist/client/ (sibling)
-    resolve(thisDir, '..', 'client'),                  // Published alt: one level up
-    resolve(thisDir, '..', '..', 'client', 'dist'),    // Dev: packages/server/src → packages/client/dist
-    resolve(thisDir, '..', '..', '..', 'packages', 'client', 'dist'), // Dev alt
-  ];
-
-  for (const candidate of candidates) {
-    try {
-      if (statSync(join(candidate, 'index.html')).isFile()) return candidate;
-    } catch {}
-  }
-
-  // Fallback
-  return candidates[0];
-}
-
-const CLIENT_DIST = resolveClientDist();
-const CLIENT_DIST_PREFIX = CLIENT_DIST + '/';
-
-async function serveStatic(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const url = new URL(req.url || '/', `http://${req.headers.host}`);
-  let filePath = resolve(CLIENT_DIST, '.' + (url.pathname === '/' ? '/index.html' : url.pathname));
-
-  if (!filePath.startsWith(CLIENT_DIST_PREFIX) && filePath !== join(CLIENT_DIST, 'index.html')) {
-    if (!filePath.startsWith(CLIENT_DIST)) {
-      res.writeHead(403); res.end('Forbidden'); return;
-    }
-  }
-
-  try { await access(filePath); } catch {
-    filePath = join(CLIENT_DIST, 'index.html');
-    try { await access(filePath); } catch {
-      res.writeHead(404, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Not found' }));
-      return;
-    }
-  }
-
-  const ext = extname(filePath);
-  const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-  try {
-    const content = await readFile(filePath);
-    const cacheControl = ext === '.html' || ext === '.webmanifest' ? 'no-cache' : 'public, max-age=31536000, immutable';
-    res.writeHead(200, { 'Content-Type': contentType, 'Cache-Control': cacheControl });
-    res.end(content);
-  } catch {
-    res.writeHead(500); res.end('Internal server error');
-  }
+  return {
+    port,
+    host,
+    auth,
+    allowHost: (hostname) => guard.allow(hostname),
+    close() {
+      closing ??= (async () => {
+        clearInterval(maintenance);
+        for (const ws of wss.clients) {
+          ws.close(1001, 'Server shutting down');
+          // Do not let an unresponsive client hold shutdown open.
+          setTimeout(() => ws.terminate(), SHUTDOWN_GRACE_MS).unref();
+        }
+        sessions.closeAll();
+        ptys.killAll();
+        await new Promise<void>((resolve) => wss.close(() => resolve()));
+        httpServer.closeIdleConnections();
+        await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+      })();
+      return closing;
+    },
+  };
 }

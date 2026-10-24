@@ -10,3 +10,6 @@ coverage/
 .DS_Store
 data/users.json
 INTERNALS.md
+playwright-report/
+test-results/
+pkg/

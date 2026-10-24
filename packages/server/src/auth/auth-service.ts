@@ -34,7 +34,12 @@ interface InternalSession extends SessionInfo {
 export interface AuthServiceOptions {
   idleTimeoutMs?: number;
   absoluteTimeoutMs?: number;
+  /** Clock, injectable for tests. */
+  now?: () => number;
 }
+
+export const DEFAULT_LOGIN_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+export const DEFAULT_LOGIN_ABSOLUTE_TIMEOUT_MS = 8 * 60 * 60 * 1000;
 
 const SCRYPT_KEYLEN = 64;
 const SCRYPT_COST = 16384; // N=2^14
@@ -44,23 +49,14 @@ const SCRYPT_PARALLELISM = 1;
 export class AuthService {
   private users = new Map<string, StoredUser>();
   private sessions = new Map<string, InternalSession>();
-  private idleTimeoutMs: number;
-  private absoluteTimeoutMs: number;
-  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly idleTimeoutMs: number;
+  private readonly absoluteTimeoutMs: number;
+  private readonly now: () => number;
 
   constructor(opts?: AuthServiceOptions) {
-    this.idleTimeoutMs = opts?.idleTimeoutMs ?? 30 * 60 * 1000; // 30 min
-    this.absoluteTimeoutMs = opts?.absoluteTimeoutMs ?? 8 * 60 * 60 * 1000; // 8 hours
-
-    // Periodically clean expired sessions
-    this.cleanupTimer = setInterval(() => this.cleanExpiredSessions(), 5 * 60 * 1000);
-  }
-
-  dispose(): void {
-    if (this.cleanupTimer) {
-      clearInterval(this.cleanupTimer);
-      this.cleanupTimer = null;
-    }
+    this.idleTimeoutMs = opts?.idleTimeoutMs ?? DEFAULT_LOGIN_IDLE_TIMEOUT_MS;
+    this.absoluteTimeoutMs = opts?.absoluteTimeoutMs ?? DEFAULT_LOGIN_ABSOLUTE_TIMEOUT_MS;
+    this.now = opts?.now ?? Date.now;
   }
 
   async createUser(username: string, password: string): Promise<void> {
@@ -98,8 +94,8 @@ export class AuthService {
     this.sessions.set(token, {
       token,
       username,
-      createdAt: Date.now(),
-      lastActivity: Date.now(),
+      createdAt: this.now(),
+      lastActivity: this.now(),
     });
 
     return { success: true, token };
@@ -109,11 +105,7 @@ export class AuthService {
     const session = this.sessions.get(token);
     if (!session) return undefined;
 
-    const now = Date.now();
-    if (
-      now - session.lastActivity > this.idleTimeoutMs ||
-      now - session.createdAt > this.absoluteTimeoutMs
-    ) {
+    if (this.isExpired(session, this.now())) {
       this.sessions.delete(token);
       return undefined;
     }
@@ -127,8 +119,8 @@ export class AuthService {
 
   touchSession(token: string): void {
     const session = this.sessions.get(token);
-    if (session) {
-      session.lastActivity = Date.now();
+    if (session && !this.isExpired(session, this.now())) {
+      session.lastActivity = this.now();
     }
   }
 
@@ -137,15 +129,23 @@ export class AuthService {
   }
 
   cleanExpiredSessions(): void {
-    const now = Date.now();
+    const now = this.now();
     for (const [token, session] of this.sessions) {
-      if (
-        now - session.lastActivity > this.idleTimeoutMs ||
-        now - session.createdAt > this.absoluteTimeoutMs
-      ) {
-        this.sessions.delete(token);
-      }
+      if (this.isExpired(session, now)) this.sessions.delete(token);
     }
+  }
+
+  /** Whether `username` has at least one login that has not expired. */
+  hasActiveSession(username: string): boolean {
+    const now = this.now();
+    for (const session of this.sessions.values()) {
+      if (session.username === username && !this.isExpired(session, now)) return true;
+    }
+    return false;
+  }
+
+  private isExpired(session: InternalSession, now: number): boolean {
+    return now - session.lastActivity > this.idleTimeoutMs || now - session.createdAt > this.absoluteTimeoutMs;
   }
 
   hasUsers(): boolean {
@@ -162,9 +162,13 @@ export class AuthService {
   }
 }
 
+/** Expired entries are swept once this many keys are tracked. */
+const MAX_TRACKED_KEYS = 1000;
+
 export interface RateLimiterOptions {
-  maxAttempts: number;
+  maxFailures: number;
   windowMs: number;
+  now?: () => number;
 }
 
 interface RateLimitEntry {
@@ -172,39 +176,45 @@ interface RateLimitEntry {
   resetAt: number;
 }
 
+/**
+ * Limits failed attempts per key (client address) within a window. An attempt is
+ * reserved before it is checked and refunded if it succeeds, so concurrent guesses
+ * cannot all slip past the limit while the (deliberately slow) password check runs,
+ * and a user who signs in or reconnects successfully is never locked out.
+ */
 export class RateLimiter {
-  private entries = new Map<string, RateLimitEntry>();
-  private opts: RateLimiterOptions;
+  private readonly entries = new Map<string, RateLimitEntry>();
+  private readonly opts: RateLimiterOptions;
+  private readonly now: () => number;
 
   constructor(opts: RateLimiterOptions) {
     this.opts = opts;
+    this.now = opts.now ?? Date.now;
   }
 
-  isAllowed(key: string): boolean {
-    const now = Date.now();
-    const entry = this.entries.get(key);
-
+  /** Reserve an attempt for `key`. Returns false (reserving nothing) when the key is blocked. */
+  tryBegin(key: string): boolean {
+    const now = this.now();
+    let entry = this.entries.get(key);
     if (!entry || now >= entry.resetAt) {
-      this.entries.set(key, { count: 1, resetAt: now + this.opts.windowMs });
-      return true;
+      entry = { count: 0, resetAt: now + this.opts.windowMs };
+      this.entries.set(key, entry);
     }
-
+    if (entry.count >= this.opts.maxFailures) return false;
     entry.count++;
-
-    // Clean expired entries opportunistically
-    if (this.entries.size > 1000) {
-      this.cleanExpired();
-    }
-
-    return entry.count <= this.opts.maxAttempts;
+    if (this.entries.size > MAX_TRACKED_KEYS) this.cleanExpired(now);
+    return true;
   }
 
-  private cleanExpired(): void {
-    const now = Date.now();
+  /** The reserved attempt succeeded: give it back. A failure keeps it counted. */
+  succeeded(key: string): void {
+    const entry = this.entries.get(key);
+    if (entry && entry.count > 0) entry.count--;
+  }
+
+  private cleanExpired(now: number): void {
     for (const [key, entry] of this.entries) {
-      if (now >= entry.resetAt) {
-        this.entries.delete(key);
-      }
+      if (now >= entry.resetAt) this.entries.delete(key);
     }
   }
 }

@@ -1,2 +1,8 @@
 packages:
   - "packages/*"
+
+# Install scripts allowed to run. node-pty uses its own to pick a prebuilt binary
+# (compiling only when none matches); esbuild uses its own to verify its binary.
+allowBuilds:
+  esbuild: true
+  node-pty: true

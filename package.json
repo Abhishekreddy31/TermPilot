@@ -1,6 +1,6 @@
 {
   "name": "@abhishekreddy31/term-pilot",
-  "version": "1.0.14",
+  "version": "1.1.0",
   "description": "Control your laptop's terminal from your phone. Voice commands, multi-session tabs, tmux mirroring, remote access.",
   "license": "MIT",
   "author": "Abhishek Reddy <abhisheksingireddy31@gmail.com> (https://github.com/Abhishekreddy31)",
@@ -36,19 +36,22 @@
     "LICENSE"
   ],
   "scripts": {
-    "dev": "pnpm -r --parallel run dev",
+    "dev": "pnpm --filter @termpilot/shared build && pnpm -r --parallel --filter @termpilot/server --filter @termpilot/client run dev",
     "dev:server": "pnpm --filter @termpilot/server dev",
     "dev:client": "pnpm --filter @termpilot/client dev",
-    "build": "pnpm --filter @termpilot/shared build && pnpm --filter @termpilot/client build && pnpm --filter @termpilot/server build",
-    "build:publish": "node scripts/build-publish.js",
-    "test": "pnpm --filter @termpilot/shared --filter @termpilot/server --filter @termpilot/client run test",
-    "start": "pnpm run build && node packages/server/dist/cli/cli.js",
-    "test:watch": "pnpm -r --parallel run test:watch",
-    "test:coverage": "pnpm -r run test:coverage",
-    "typecheck": "pnpm -r run typecheck",
-    "clean": "pnpm -r run clean && rm -rf dist",
-    "e2e": "pnpm --filter @termpilot/e2e test",
-    "audit": "pnpm audit --prod",
+    "build": "node scripts/build-publish.js",
+    "start": "pnpm run build && node dist/cli.js",
+    "test": "vitest run --project unit:node --project unit:client --project integration",
+    "test:unit": "vitest run --project unit:node --project unit:client",
+    "test:integration": "vitest run --project integration",
+    "test:coverage": "vitest run --project unit:node --project unit:client --project integration --coverage",
+    "test:watch": "vitest --project unit:node --project unit:client --project integration",
+    "test:e2e": "playwright test --config tests/e2e/playwright.config.ts",
+    "lint": "eslint .",
+    "typecheck": "pnpm --filter @termpilot/shared build && pnpm -r run typecheck && tsc -p tests/tsconfig.json",
+    "audit": "pnpm audit",
+    "check": "pnpm run lint && pnpm run typecheck && pnpm run test",
+    "clean": "pnpm -r run clean && node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "prepublishOnly": "node scripts/build-publish.js"
   },
   "engines": {
@@ -60,17 +63,29 @@
     "win32"
   ],
   "dependencies": {
-    "node-pty": "^1.0.0",
-    "ws": "^8.18.0",
-    "zod": "^3.24.0"
+    "node-pty": "1.2.0-beta.18",
+    "ws": "^8.22.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "esbuild": "^0.25.0"
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.64.1",
+    "@testing-library/preact": "^3.2.6",
+    "@types/node": "^22.20.5",
+    "@types/ws": "^8.18.2",
+    "@vitest/coverage-v8": "^5.0.5",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.13.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.13.0",
+    "happy-dom": "^21.0.4",
+    "preact": "^10.29.8",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.0",
+    "vitest": "^5.0.5"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "node-pty"
-    ]
+  "packageManager": "pnpm@12.4.2",
+  "publishConfig": {
+    "access": "public"
   }
 }
