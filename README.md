@@ -153,7 +153,7 @@ term-pilot [options]
   -h, --help                 Show help
   -v, --version              Show the version
 
-Environment: PORT, HOST, TUNNEL=1, TERMPILOT_ALLOWED_HOSTS, TERMPILOT_PASSWORD
+Environment: PORT, HOST, TUNNEL=1, TERMPILOT_ALLOWED_HOSTS, TERMPILOT_PASSWORD, TERMPILOT_DEBUG=1 (connection log)
 ```
 
 ## Platform support

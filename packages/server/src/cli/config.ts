@@ -92,4 +92,5 @@ Environment variables:
   TUNNEL=1                   Same as --tunnel
   TERMPILOT_ALLOWED_HOSTS    Same as --allowed-hosts
   TERMPILOT_PASSWORD         Use this password instead of generating one
+  TERMPILOT_DEBUG=1          Log connection events to stderr (no secrets or terminal contents)
 `;

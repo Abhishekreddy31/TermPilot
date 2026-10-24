@@ -21,7 +21,7 @@ export interface RunningCli {
 export function isolatedEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const home = mkdtempSync(join(tmpdir(), 'termpilot-home-'));
   const tmuxDir = mkdtempSync(join(tmpdir(), 'termpilot-tmux-'));
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, TMUX_TMPDIR: tmuxDir, ...extra };
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, TMUX_TMPDIR: tmuxDir, TERMPILOT_DEBUG: '1', ...extra };
   delete env.TMUX;
   delete env.PORT;
   delete env.HOST;

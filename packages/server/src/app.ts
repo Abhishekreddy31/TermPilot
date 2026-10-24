@@ -14,6 +14,7 @@ import { HttpError, createApiRouter, sendJson } from './http/api.js';
 import { createMissingClientHandler, createStaticHandler, resolveClientDist } from './http/static-files.js';
 import { ClientConnection, DEFAULT_FLOW_CONTROL, type FlowControlOptions } from './ws/client-connection.js';
 import { handleMessage } from './ws/message-handler.js';
+import { debug } from './log.js';
 
 export const SERVER_DEFAULTS = {
   host: '127.0.0.1',
@@ -233,6 +234,7 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
     connections.add(conn);
     const ip = addressOf(req);
     changePending(ip, 1);
+    debug(`ws open from ${ip}`);
     let pending = true;
     const leavePending = () => {
       if (!pending) return;
@@ -315,6 +317,7 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
         conn.username = login.username;
         auth.touchSession(message.token);
         conn.send({ type: 'auth_ok', username: login.username, protocol: PROTOCOL_VERSION });
+        debug(`ws authenticated from ${ip}`);
         return;
       }
 
@@ -326,7 +329,8 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
       queue = queue.then(() => handleMessage(conn, message, { sessions, tmux, shellSpec }));
     });
 
-    ws.on('close', () => {
+    ws.on('close', (code: number, reason: Buffer) => {
+      debug(`ws closed from ${ip}: code ${code}${reason.length ? ` (${reason.toString()})` : ''}`);
       clearTimeout(authTimer);
       leavePending();
       clearInterval(heartbeat);
@@ -335,8 +339,9 @@ export async function createServer(opts: ServerOptions): Promise<TermPilotServer
       conn.dispose();
     });
 
-    ws.on('error', () => {
+    ws.on('error', (err: Error) => {
       // `close` follows and performs the cleanup.
+      debug(`ws error from ${ip}: ${err.message}`);
     });
   });
 
