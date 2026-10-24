@@ -95,10 +95,16 @@ export async function freePort(): Promise<number> {
 export const test = base.extend<{ app: RunningCli }>({
   // Playwright requires an object pattern for the fixtures argument, even when none are used.
   // eslint-disable-next-line no-empty-pattern
-  app: async ({}, use) => {
+  app: async ({}, use, testInfo) => {
     const app = await startCli();
     await use(app);
+    const exitCode = app.process.exitCode;
     await app.stop();
+    // The server's own output is the first thing needed to understand a failure.
+    if (testInfo.status !== testInfo.expectedStatus) {
+      await testInfo.attach('term-pilot output', { body: `${app.output()}\n[exit code before stop: ${exitCode}]`, contentType: 'text/plain' });
+      console.log(`--- term-pilot output (${testInfo.title}) ---\n${app.output()}\n[exit code before stop: ${exitCode}]`);
+    }
   },
 });
 
