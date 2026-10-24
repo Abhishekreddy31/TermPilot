@@ -92,7 +92,33 @@ export async function freePort(): Promise<number> {
   });
 }
 
-export const test = base.extend<{ app: RunningCli }>({
+const MAX_LOGGED_FRAMES = 200;
+const MAX_LOGGED_FRAME_CHARS = 300;
+
+export const test = base.extend<{ app: RunningCli; wsLog: string[] }>({
+  // Records the page's WebSocket traffic; attached to the report when a test fails.
+  wsLog: [async ({ page }, use, testInfo) => {
+    const log: string[] = [];
+    const add = (line: string) => {
+      log.push(`${new Date().toISOString()} ${line.slice(0, MAX_LOGGED_FRAME_CHARS)}`);
+      if (log.length > MAX_LOGGED_FRAMES) log.shift();
+    };
+    page.on('websocket', (ws) => {
+      add(`open ${ws.url()}`);
+      ws.on('framesent', (f) => add(`> ${String(f.payload)}`));
+      ws.on('framereceived', (f) => add(`< ${String(f.payload)}`));
+      ws.on('socketerror', (e) => add(`socket error ${e}`));
+      ws.on('close', () => add('close'));
+    });
+    page.on('console', (m) => add(`console.${m.type()} ${m.text()}`));
+    page.on('pageerror', (e) => add(`pageerror ${e.message}`));
+    await use(log);
+    if (testInfo.status !== testInfo.expectedStatus) {
+      await testInfo.attach('websocket log', { body: log.join('\n'), contentType: 'text/plain' });
+      console.log(`--- websocket log (${testInfo.title}) ---\n${log.join('\n')}`);
+    }
+  }, { auto: true }],
+
   // Playwright requires an object pattern for the fixtures argument, even when none are used.
   // eslint-disable-next-line no-empty-pattern
   app: async ({}, use, testInfo) => {
