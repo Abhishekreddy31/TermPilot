@@ -1,75 +1,56 @@
 #!/usr/bin/env node
 
 /**
- * Build script for npm publishing.
- * Uses esbuild to bundle the server (inlining @termpilot/shared)
- * while keeping native deps (node-pty, ws) as externals.
- * Copies pre-built client into dist/client/.
+ * Builds the npm package into dist/:
+ *   dist/cli.js     the server, bundled with esbuild (workspace code inlined;
+ *                   third-party runtime dependencies stay external so npm installs
+ *                   them and `npm audit` can see them)
+ *   dist/client/    the built PWA
  */
 
-import { execSync } from 'node:child_process';
-import { cpSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildSync } from 'esbuild';
+import { build } from 'esbuild';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const DIST = join(ROOT, 'dist');
+const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
 
-function run(cmd) {
-  console.log(`> ${cmd}`);
-  execSync(cmd, { cwd: ROOT, stdio: 'inherit' });
+function pnpm(...args) {
+  console.log(`> pnpm ${args.join(' ')}`);
+  // shell: true resolves pnpm's .cmd shim on Windows.
+  execFileSync('pnpm', args, { cwd: ROOT, stdio: 'inherit', shell: process.platform === 'win32' });
 }
 
-console.log('Building TermPilot for npm publishing...\n');
+rmSync(DIST, { recursive: true, force: true });
+pnpm('--filter', '@termpilot/shared', 'build');
+pnpm('--filter', '@termpilot/client', 'build');
 
-// Clean
-rmSync(join(ROOT, 'dist'), { recursive: true, force: true });
-
-// Build shared (needed for esbuild to resolve imports)
-run('pnpm --filter @termpilot/shared build');
-
-// Build client (Vite)
-run('pnpm --filter @termpilot/client build');
-
-// Bundle server with esbuild — inlines @termpilot/shared, keeps native deps external
-const dist = join(ROOT, 'dist');
-mkdirSync(dist, { recursive: true });
-
-console.log('> esbuild: bundling server...');
-
-buildSync({
+console.log('> esbuild packages/server/src/cli/cli.ts');
+await build({
   entryPoints: [join(ROOT, 'packages/server/src/cli/cli.ts')],
+  outfile: join(DIST, 'cli.js'),
   bundle: true,
   platform: 'node',
-  target: 'node20',
+  target: `node${pkg.engines.node.match(/\d+/)[0]}`,
   format: 'esm',
-  outfile: join(dist, 'cli.js'),
-  external: ['node-pty', 'ws'],
-  // Resolve workspace packages
-  alias: {
-    '@termpilot/shared': join(ROOT, 'packages/shared/src/index.ts'),
-  },
-  // Keep dynamic requires working
-  mainFields: ['module', 'main'],
-  resolveExtensions: ['.ts', '.js'],
+  external: Object.keys(pkg.dependencies),
+  banner: { js: '#!/usr/bin/env node' },
+  define: { TERMPILOT_VERSION: JSON.stringify(pkg.version) },
   sourcemap: false,
-  minify: false, // Keep readable for debugging
-  define: {
-    'TERMPILOT_VERSION': JSON.stringify(
-      JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version
-    ),
-  },
+  minify: false,
+  logLevel: 'warning',
 });
 
-// Prepend shebang to cli.js (must be on line 1, no preceding newline)
-const cliPath = join(dist, 'cli.js');
-const cliContent = readFileSync(cliPath, 'utf8');
-writeFileSync(cliPath, '#!/usr/bin/env node\n' + cliContent);
+mkdirSync(join(DIST, 'client'), { recursive: true });
+cpSync(join(ROOT, 'packages/client/dist'), join(DIST, 'client'), { recursive: true });
 
-// Copy built client into dist/client
-mkdirSync(join(dist, 'client'), { recursive: true });
-cpSync(join(ROOT, 'packages/client/dist'), join(dist, 'client'), { recursive: true });
-
-console.log('\nBuild complete! dist/ is ready for npm publish.');
-run('ls -la dist/');
-run('ls dist/client/ | head -10');
+for (const required of ['cli.js', 'client/index.html', 'client/sw.js']) {
+  if (!existsSync(join(DIST, required))) {
+    console.error(`Build is incomplete: dist/${required} is missing`);
+    process.exit(1);
+  }
+}
+console.log(`\nBuilt ${pkg.name}@${pkg.version} into dist/`);

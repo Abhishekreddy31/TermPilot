@@ -1,164 +1,158 @@
+import { randomBytes } from 'node:crypto';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { createServer } from '../app.js';
 import { TunnelManager } from '../tunnel/tunnel-manager.js';
-import { randomBytes } from 'node:crypto';
-import { writeFileSync, mkdirSync, chmodSync, readdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { TmuxManager } from '../terminal/tmux-manager.js';
+import { isWildcardHost, localInterfaceAddresses } from '../http/request-guard.js';
+import { CLI_DEFAULTS, ConfigError, HELP_TEXT, parseConfig } from './config.js';
 
-// Fix node-pty spawn-helper permissions (npm doesn't preserve +x on prebuilds)
-// Walk up from the CLI script to find node_modules/node-pty/prebuilds
-try {
-  let searchDir = dirname(process.argv[1] || '');
-  for (let i = 0; i < 5; i++) {
-    const prebuildsDir = join(searchDir, 'node_modules', 'node-pty', 'prebuilds');
-    try {
-      for (const platform of readdirSync(prebuildsDir)) {
-        try {
-          chmodSync(join(prebuildsDir, platform, 'spawn-helper'), 0o755);
-        } catch {}
-      }
-      break; // Found and fixed
-    } catch {}
-    searchDir = dirname(searchDir);
-  }
-} catch {}
-
-// Injected by esbuild at build time; falls back for dev mode
+// Injected by esbuild for the published bundle.
 declare const TERMPILOT_VERSION: string | undefined;
-const VERSION = typeof TERMPILOT_VERSION !== 'undefined' ? TERMPILOT_VERSION : '1.0.0-dev';
+const VERSION = typeof TERMPILOT_VERSION !== 'undefined' ? TERMPILOT_VERSION : '0.0.0-dev';
 
-const args = process.argv.slice(2);
+const ADMIN_USER = 'admin';
+const GENERATED_PASSWORD_BYTES = 12;
+const PRIVATE_DIR_MODE = 0o700;
+const PRIVATE_FILE_MODE = 0o600;
 
-if (args.includes('--help') || args.includes('-h')) {
-  console.log(`
-Term-Pilot — Mobile terminal management with voice control
-
-Usage:
-  term-pilot [options]
-
-Options:
-  --port <port>    Port to listen on (default: 3000, env: PORT)
-  --host <host>    Host to bind to (default: 127.0.0.1, env: HOST)
-  --tunnel         Enable Cloudflare Tunnel for remote access (env: TUNNEL=1)
-  --help, -h       Show this help message
-  --version, -v    Show version
-
-Environment variables:
-  PORT                 Server port (default: 3000)
-  HOST                 Bind address (default: 127.0.0.1)
-  TUNNEL               Set to "1" to enable tunnel
-  TERMPILOT_PASSWORD   Set a fixed password (otherwise auto-generated)
-`);
-  process.exit(0);
+function urlFor(host: string, port: number): string {
+  return `http://${host.includes(':') ? `[${host}]` : host}:${port}`;
 }
 
-if (args.includes('--version') || args.includes('-v')) {
-  console.log(`term-pilot v${VERSION}`);
-  process.exit(0);
+/** Addresses a person can actually type into a browser for this bind address. */
+function reachableUrls(bindHost: string, port: number): string[] {
+  if (!isWildcardHost(bindHost)) return [urlFor(bindHost, port)];
+  const lan = localInterfaceAddresses().filter((address) => !address.includes(':'));
+  return [urlFor('localhost', port), ...lan.map((address) => urlFor(address, port))];
 }
 
-function getArg(flag: string): string | undefined {
-  const idx = args.indexOf(flag);
-  if (idx >= 0 && idx + 1 < args.length) return args[idx + 1];
-  return undefined;
-}
-
-const PORT = parseInt(getArg('--port') || process.env.PORT || '3000', 10);
-const ENABLE_TUNNEL = args.includes('--tunnel') || process.env.TUNNEL === '1';
-const HOST = getArg('--host') || process.env.HOST || (ENABLE_TUNNEL ? '0.0.0.0' : '127.0.0.1');
-
-async function main() {
-  const server = await createServer({ port: PORT, host: HOST });
-
-  if (!server.auth.hasUsers()) {
-    const password = process.env.TERMPILOT_PASSWORD || randomBytes(12).toString('base64url');
-    await server.auth.createUser('admin', password);
-
-    console.log('');
-    console.log('=== TermPilot Server ===');
-    console.log(`  Local:    http://localhost:${server.port}`);
-    console.log(`  User:     admin`);
-
-    if (!process.env.TERMPILOT_PASSWORD) {
-      try {
-        const credDir = join(process.env.HOME || '/tmp', '.termpilot');
-        mkdirSync(credDir, { recursive: true, mode: 0o700 });
-        const credFile = join(credDir, 'credentials');
-        writeFileSync(credFile, `admin:${password}\n`, { mode: 0o600 });
-        console.log(`  Password: written to ${credFile}`);
-      } catch {
-        console.warn('  Password: Could not write credentials file.');
-        process.stderr.write(`  [one-time] Password: ${password}\n`);
-      }
-    } else {
-      console.log('  Password: (set via TERMPILOT_PASSWORD env var)');
-    }
-    console.log('');
-  } else {
-    console.log(`TermPilot running on http://${HOST}:${server.port}`);
-  }
-
-  // Check tmux availability
+/** Store the generated password where only this user can read it. */
+function writeCredentials(password: string): string {
+  const dir = join(homedir(), '.termpilot');
+  mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
+  const file = join(dir, 'credentials');
+  // `mode` only applies when creating; tighten an existing file before the new password goes in.
   try {
-    const { execFileSync } = await import('node:child_process');
-    execFileSync('tmux', ['-V'], { stdio: 'ignore' });
+    chmodSync(file, PRIVATE_FILE_MODE);
   } catch {
-    const isMac = process.platform === 'darwin';
-    const isWin = process.platform === 'win32';
-    const installCmd = isMac ? 'brew install tmux' : isWin ? 'wsl sudo apt install tmux' : 'sudo apt install tmux';
-    console.log(`  Note:     tmux not found. Mirror mode requires tmux.`);
-    console.log(`            Install with: ${installCmd}`);
-    console.log('');
+    // Not there yet.
+  }
+  writeFileSync(file, `${ADMIN_USER}:${password}\n`, { mode: PRIVATE_FILE_MODE });
+  chmodSync(dir, PRIVATE_DIR_MODE);
+  return file;
+}
+
+async function main(): Promise<void> {
+  let config;
+  try {
+    config = parseConfig(process.argv.slice(2), process.env);
+  } catch (err) {
+    if (err instanceof ConfigError) {
+      console.error(`Error: ${err.message}\nRun "term-pilot --help" for usage.`);
+      process.exitCode = 2;
+      return;
+    }
+    throw err;
   }
 
-  let tunnel: TunnelManager | null = null;
-  if (ENABLE_TUNNEL) {
-    console.log('  !! SECURITY WARNING !!');
-    console.log('  Tunnel mode exposes this server to the PUBLIC INTERNET.');
-    console.log('  Use a STRONG password. Do not share the tunnel URL.');
-    console.log('');
+  if (config.help) {
+    console.log(HELP_TEXT);
+    return;
+  }
+  if (config.version) {
+    console.log(`term-pilot v${VERSION}`);
+    return;
+  }
 
-    tunnel = new TunnelManager(server.port);
-    tunnel.onStateChange((state, url) => {
-      if (state === 'running' && url) {
-        console.log(`  Tunnel:   ${url}`);
-        console.log('');
-      } else if (state === 'error') {
-        console.log('  Tunnel:   Failed (is cloudflared installed?)');
-      }
+  let server;
+  try {
+    server = await createServer({
+      port: config.port,
+      host: config.host,
+      portRetries: CLI_DEFAULTS.portRetries,
+      allowedHosts: config.allowedHosts,
+      trustTunnelProxy: config.tunnel,
     });
-    tunnel.start();
-  } else {
-    console.log('  Tunnel:   disabled (use --tunnel to enable)');
-    console.log('');
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EADDRINUSE') {
+      console.error(`Error: ports ${config.port}-${config.port + CLI_DEFAULTS.portRetries} are all in use. Pick another with --port.`);
+    } else if (code === 'EADDRNOTAVAIL') {
+      console.error(`Error: ${config.host} is not an address of this machine.`);
+    } else {
+      throw err;
+    }
+    process.exitCode = 1;
+    return;
   }
 
-  console.log('========================');
-  console.log('');
-
+  // Handle signals as soon as the server exists, so a Ctrl+C during startup still shuts down cleanly.
+  let tunnel: TunnelManager | null = null;
   let shuttingDown = false;
   const shutdown = async (signal: string) => {
-    if (shuttingDown) return; // Prevent double shutdown
+    if (shuttingDown) return;
     shuttingDown = true;
     console.log(`\nReceived ${signal}, shutting down...`);
     tunnel?.stop();
     await server.close();
-    process.exitCode = 0;
   };
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('unhandledRejection', (err) => {
-    console.error('Unhandled rejection:', err);
-  });
+  const password = config.password ?? randomBytes(GENERATED_PASSWORD_BYTES).toString('base64url');
+  await server.auth.createUser(ADMIN_USER, password);
+
+  const lines = ['', `=== TermPilot v${VERSION} ===`];
+  if (server.port !== config.port) lines.push(`  Note:     port ${config.port} was busy, using ${server.port}`);
+  for (const [index, url] of reachableUrls(server.host, server.port).entries()) {
+    lines.push(`  ${index === 0 ? 'Open:    ' : '         '} ${url}`);
+  }
+  lines.push(`  User:     ${ADMIN_USER}`);
+  if (config.password) {
+    lines.push('  Password: (from TERMPILOT_PASSWORD)');
+  } else {
+    try {
+      lines.push(`  Password: written to ${writeCredentials(password)}`);
+    } catch (err) {
+      lines.push(`  Password: ${password}   (could not write credentials file: ${(err as Error).message})`);
+    }
+  }
+  if (isWildcardHost(server.host)) {
+    lines.push(
+      '',
+      '  Network access is plain HTTP: anyone on this network can see the traffic.',
+      '  Browsers also only allow voice input over HTTPS or on localhost; use --tunnel for both.',
+    );
+  }
+  console.log(lines.join('\n'));
+
+  const tmux = new TmuxManager();
+  if (!(await tmux.isAvailable())) console.log(`\n  Mirror:   unavailable. ${tmux.unavailableMessage()}`);
+
+  if (config.tunnel) {
+    console.log('\n  Tunnel:   starting... (this exposes the server to the internet; keep the password private)');
+    tunnel = new TunnelManager(server.port, {
+      targetHost: isWildcardHost(server.host) ? '127.0.0.1' : server.host,
+    });
+    tunnel.onStateChange((state, detail) => {
+      if (state === 'running' && detail) {
+        server.allowHost(new URL(detail).hostname);
+        console.log(`  Tunnel:   ${detail}`);
+      } else if (state === 'error') {
+        console.log(`  Tunnel:   failed. ${detail ?? ''}`);
+      }
+    });
+    tunnel.start();
+  } else {
+    console.log('\n  Tunnel:   off (use --tunnel for access from anywhere)');
+  }
+  console.log('');
+
 }
 
-main().catch((err) => {
-  // User-friendly port-in-use message
-  if (err?.code === 'EADDRINUSE') {
-    console.error(`Error: Port ${PORT} is already in use.`);
-    console.error(`Try: term-pilot --port ${PORT + 1}`);
-  } else {
-    console.error('Failed to start server:', err);
-  }
-  process.exit(1);
+main().catch((err: unknown) => {
+  console.error('Failed to start TermPilot:', err);
+  process.exitCode = 1;
 });

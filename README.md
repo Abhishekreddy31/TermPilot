@@ -5,390 +5,213 @@
 <h1 align="center">TermPilot</h1>
 
 <p align="center">
-  <strong>Control your laptop's terminal from your phone.</strong><br>
-  Voice commands, multi-session tabs, real-time mirroring, remote access from anywhere.
+  <strong>Control your computer's terminal from your phone.</strong><br>
+  Real shells, voice commands, multiple tabs, tmux mirroring, and access from anywhere.
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0.0-blue?style=flat-square" alt="version">
-  <img src="https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen?style=flat-square&logo=node.js" alt="node">
-  <img src="https://img.shields.io/badge/tests-103%20passing-brightgreen?style=flat-square" alt="tests">
-  <img src="https://img.shields.io/badge/vulnerabilities-0-brightgreen?style=flat-square" alt="vulnerabilities">
-  <img src="https://img.shields.io/badge/security%20audits-3%20passed-brightgreen?style=flat-square" alt="security">
-  <img src="https://img.shields.io/badge/LOC-3.8K-blue?style=flat-square" alt="lines of code">
-  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="license">
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat-square" alt="platform">
-  <img src="https://img.shields.io/badge/cost-%240-brightgreen?style=flat-square" alt="cost">
+  <a href="https://www.npmjs.com/package/@abhishekreddy31/term-pilot"><img src="https://img.shields.io/npm/v/@abhishekreddy31/term-pilot?style=flat-square" alt="npm version"></a>
+  <a href="https://github.com/Abhishekreddy31/TermPilot/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Abhishekreddy31/TermPilot/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status"></a>
+  <img src="https://img.shields.io/node/v/@abhishekreddy31/term-pilot?style=flat-square" alt="Node version">
+  <img src="https://img.shields.io/npm/l/@abhishekreddy31/term-pilot?style=flat-square" alt="License">
 </p>
 
 <p align="center">
-  <a href="#quick-start">Quick Start</a> •
+  <a href="#quick-start">Quick start</a> •
   <a href="#features">Features</a> •
-  <a href="#how-it-works">How It Works</a> •
-  <a href="#architecture">Architecture</a> •
+  <a href="#reaching-it-from-your-phone">Access</a> •
   <a href="#security">Security</a> •
-  <a href="#quick-start">Quick Start</a> •
-  <a href="#why-termpilot">Why TermPilot?</a> •
-  <a href="#contributing">Contributing</a>
+  <a href="#platform-support">Platforms</a> •
+  <a href="#development">Development</a>
 </p>
-
-<!--
-  TODO: Add a demo GIF here for maximum visual impact.
-  Record with: iPhone screen record → convert to GIF
-  Show: login → type a command → voice command → switch tabs → mirror mode
-  Place the GIF with:
-  <p align="center">
-    <img src="docs/demo.gif" width="360" alt="TermPilot demo">
-  </p>
--->
 
 ---
 
 ## Why TermPilot?
 
-**Your terminal shouldn't be tied to your desk.**
+You start a deployment, a long build or a migration, then step away. Did it finish? Is it waiting for a `y`?
+Or you are on the couch and need to restart a service while the laptop is across the room.
 
-You're running a deployment, a long build, or a database migration. You step away — to grab coffee, to a meeting, to another room. Now you're stuck wondering: *Did it finish? Did it fail? Do I need to type `y` to confirm something?*
+TermPilot puts that computer's terminal on your phone with one command:
 
-Or you're on the couch and need to quickly SSH somewhere, restart a service, check logs. Your laptop is across the room. You have your phone in your hand.
+- **A real terminal**, not a log viewer: vim, htop and interactive prompts all work.
+- **Sessions that survive**: lock the phone, lose Wi-Fi or reload the page, and your shells (and whatever they are running) are still there.
+- **Speak instead of type**: say "git commit dash m fix" and review `git commit -m fix` before sending.
+- **Mirror what is already running**: attach to the tmux sessions on your computer and see exactly what it shows.
+- **Access from anywhere** with `--tunnel`: a free HTTPS URL through Cloudflare, no account needed.
+- **Nothing to deploy**: no server, no sign-up, no subscription. It runs on your computer and in your phone's browser.
 
-**TermPilot solves this.** One command, and your laptop's terminal is on your phone:
-
-- **Speak instead of type** — Say "git status" or "docker ps" instead of wrestling with a phone keyboard
-- **Full interactive terminal** — Not just output monitoring. Run vim, htop, interactive prompts — everything works
-- **Mirror what's already running** — Attach to existing tmux sessions and see exactly what's on your laptop screen, in real-time
-- **Access from anywhere** — One flag (`--tunnel`) gives you a public HTTPS URL. Works from cellular, coffee shop WiFi, anywhere
-- **No infrastructure needed** — No servers to deploy, no accounts to create, no subscriptions. It runs on your laptop and your phone's browser. That's it.
-- **Install in 5 seconds** — `npx @abhishekreddy31/term-pilot`. No build steps, no config files, no Docker.
-
-TermPilot is built for developers who want their terminal available wherever they are — without complexity, without cost, and without compromise on functionality.
-
----
-
-## Quick Start
+## Quick start
 
 ```bash
-# Install and run (one command)
-npx @abhishekreddy31/term-pilot
-
-# Or install globally
-npm install -g @abhishekreddy31/term-pilot
-term-pilot
-
-# With remote access from anywhere
-term-pilot --tunnel
+npx @abhishekreddy31/term-pilot           # run once
+npm install -g @abhishekreddy31/term-pilot # or install it
+term-pilot --tunnel                        # with a public HTTPS URL
 ```
 
-Credentials are written to `~/.termpilot/credentials`. Open the URL on your phone.
-
-### From source
-
-```bash
-git clone https://github.com/Abhishekreddy31/TermPilot.git
-cd TermPilot
-pnpm install
-pnpm start
-```
-
----
+Sign in as `admin` with the password from `~/.termpilot/credentials` (a new one is generated on every start
+unless you set `TERMPILOT_PASSWORD`).
 
 ## Features
 
-### Two Modes
+| | |
+|---|---|
+| **Sessions** | Open as many shells as you like as tabs. They belong to your login, not to the browser tab: reconnecting or reloading gives them back with their recent output. |
+| **Mirror mode** | Attach to existing tmux sessions on the computer. Typing on either side shows on both. Detaching (or losing the connection) leaves the tmux session running. |
+| **Extra keys** | Esc, Tab, arrows, PgUp/PgDn and common symbols. **Ctrl** and **Alt** arm for the next key, whether you tap it on the bar or type it on the phone keyboard, so Ctrl+C, Ctrl+D, Alt+B and Ctrl+arrow all work. |
+| **Voice** | Speak a command, check the transcription, then send it. See [voice grammar](#voice-commands). |
+| **Touch** | Swipe to scroll 5,000 lines of scrollback. |
+| **PWA** | Add it to the home screen for a full-screen app. Updates install themselves. |
 
-| Mode | What it does |
-|------|-------------|
-| **Independent Sessions** | Create fresh terminal sessions from your phone — like opening new Terminal.app windows |
-| **Mirror Mode** | Attach to existing tmux sessions running on your laptop — bidirectional real-time mirroring |
+## Reaching it from your phone
 
-### Core Capabilities
+TermPilot listens on `127.0.0.1` by default, so nothing on the network can reach it until you choose how:
 
-- **Multi-terminal tabs** — Create, switch, and destroy terminal sessions
-- **Voice commands** — Speak commands, confirm, execute. Understands developer vocabulary (`"git commit dash m"` → `git commit -m`)
-- **Extra keys toolbar** — Esc, Tab, Ctrl, Alt, arrow keys, PgUp/PgDn, pipe, tilde — keys your phone keyboard doesn't have
-- **Touch scrolling** — Swipe to scroll through terminal history (5000 lines)
-- **Remote access** — Cloudflare Tunnel gives you a public HTTPS URL for free. Access your terminals from cellular, coffee shop WiFi, anywhere
-- **PWA installable** — Add to home screen for a native app experience. App shell cached for instant loading
-- **Zero cost** — No cloud servers, no paid APIs, no app store fees, no subscriptions
+| Option | Command | Notes |
+|---|---|---|
+| **Tunnel** (recommended) | `term-pilot --tunnel` | HTTPS URL that works from anywhere. Needs [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) (`brew install cloudflared`, `winget install --id Cloudflare.cloudflared`). |
+| **Same Wi-Fi** | `term-pilot --host 0.0.0.0` | Prints the computer's network addresses. Plain HTTP, so traffic is visible to the network, and browsers disable voice input on non-HTTPS pages. |
+| **Your own domain / proxy** | `term-pilot --allowed-hosts term.example.com` | Requests are only accepted for known hostnames (see [Security](#security)); add yours. A leading dot allows subdomains: `.example.com`. |
 
----
-
-## How It Works
-
-```
-Phone (browser/PWA)                Your Laptop
-┌──────────────────┐              ┌──────────────────────┐
-│  xterm.js        │◄──WebSocket──│  Node.js Server      │
-│  Voice Input     │──────────────│  ├─ PTY Manager      │
-│  Extra Keys      │              │  │  └─ /bin/zsh      │
-│  Session Tabs    │              │  ├─ Tmux Manager     │
-│  Login Screen    │              │  │  └─ tmux attach   │
-└──────────────────┘              │  ├─ Auth (scrypt)    │
-         │                        │  └─ Cloudflare Tunnel│
-         │ (optional)             └──────────────────────┘
-         │
-    Cloudflare Edge
-    (free, auto TLS)
-```
-
-1. **Server starts** on your laptop, binds to `localhost:3000`
-2. **You log in** from your phone with the credentials from `~/.termpilot/credentials`
-3. **A terminal session** is created — the server spawns a real shell (bash/zsh) via a pseudo-terminal (PTY)
-4. **Everything you type** (keyboard, extra keys, or voice) goes over WebSocket → server writes to PTY
-5. **Shell output** flows back over WebSocket → xterm.js renders it on your phone
-6. **Mirror mode**: attach to existing tmux sessions for bidirectional mirroring — what you see on your laptop, you see on your phone
-7. **Tunnel mode**: Cloudflare proxies traffic so you can access from any network
-
----
-
-## Architecture
-
-```mermaid
-graph TB
-    subgraph Phone["Phone (Any Browser)"]
-        PWA["PWA Client<br/>Preact + xterm.js"]
-        Voice["Voice Input<br/>Web Speech API"]
-        ExtraKeys["Extra Keys Row"]
-    end
-
-    subgraph Network["Network Layer"]
-        CF["Cloudflare Tunnel<br/>(optional, free)"]
-    end
-
-    subgraph Laptop["Your Laptop"]
-        HTTP["HTTP Server<br/>Auth + Static Files + CSRF"]
-        WS["WebSocket Server<br/>Zod-validated JSON Protocol"]
-        PTY["PTY Manager<br/>node-pty"]
-        TMUX["Tmux Manager<br/>Mirror Mode"]
-        Auth["Auth Service<br/>scrypt + sessions"]
-    end
-
-    PWA <-->|"WSS (encrypted)"| CF
-    Voice -->|"transcript"| PWA
-    ExtraKeys -->|"key data"| PWA
-    CF <-->|"localhost"| WS
-    CF <-->|"localhost"| HTTP
-    HTTP --> Auth
-    WS --> PTY
-    WS --> TMUX
-    WS --> Auth
-```
-
-### WebSocket Protocol
-
-```mermaid
-sequenceDiagram
-    participant C as Client (PWA)
-    participant S as Server
-
-    C->>S: POST /api/auth/csrf
-    S-->>C: {csrfToken: "..."}
-    C->>S: POST /api/auth/login + X-CSRF-Token
-    S-->>C: {token: "abc123"}
-
-    C->>S: WebSocket /ws
-    S-->>C: Connection open
-    C->>S: {type: "auth", token: "abc123"}
-    S-->>C: {type: "auth_ok"}
-
-    C->>S: {type: "create", cols: 80, rows: 24}
-    S-->>C: {type: "session_created", sessionId: "uuid-1"}
-    S-->>C: {type: "output", sessionId: "uuid-1", data: "$ "}
-
-    C->>S: {type: "input", sessionId: "uuid-1", data: "ls\n"}
-    S-->>C: {type: "output", sessionId: "uuid-1", data: "file1 file2\n$ "}
-
-    Note over C,S: Mirror Mode
-    C->>S: {type: "tmux_list"}
-    S-->>C: {type: "tmux_sessions", sessions: [...]}
-    C->>S: {type: "tmux_attach", sessionName: "dev"}
-    S-->>C: {type: "tmux_attached", sessionId: "tmux:dev"}
-```
-
----
-
-## Project Structure
+## How it works
 
 ```
-termpilot/
-├── packages/
-│   ├── shared/                     # @termpilot/shared
-│   │   └── src/
-│   │       ├── protocol.ts         # Binary message types + encode/decode
-│   │       ├── schemas.ts          # Zod validation (session, tmux, input, resize)
-│   │       └── index.ts
-│   ├── server/                     # @termpilot/server
-│   │   └── src/
-│   │       ├── cli/cli.ts          # CLI entry point (--port, --tunnel, --help)
-│   │       ├── app.ts              # HTTP + WebSocket server + message routing
-│   │       ├── terminal/
-│   │       │   ├── pty-manager.ts  # PTY lifecycle, output buffering, idle sweep
-│   │       │   ├── tmux-manager.ts # tmux list/attach/detach/create/kill
-│   │       │   └── safe-env.ts     # Environment variable allowlist
-│   │       ├── auth/
-│   │       │   └── auth-service.ts # scrypt hashing, sessions, rate limiting
-│   │       └── tunnel/
-│   │           └── tunnel-manager.ts
-│   ├── client/                     # @termpilot/client (Preact PWA)
-│   │   └── src/
-│   │       ├── components/         # App, Login, TerminalView, ExtraKeys, VoiceInput
-│   │       ├── services/           # API client, WebSocket client, Voice service
-│   │       └── styles/global.css
-│   └── e2e/                        # Playwright (future)
-├── scripts/build-publish.js        # esbuild bundler for npm publishing
-├── LICENSE                         # MIT
-└── package.json                    # npm package config with bin entry
+Phone (browser / PWA)                      Your computer
+┌────────────────────┐                     ┌────────────────────────────────┐
+│ xterm.js terminal  │◄─── WebSocket ─────►│ Node.js server                 │
+│ extra keys, voice  │   (JSON, deflate)   │  ├─ session registry           │
+│ tabs, login        │                     │  │   ├─ shells (node-pty)      │
+└────────────────────┘                     │  │   └─ tmux clients (mirror)  │
+          ▲                                │  ├─ auth (scrypt, tokens)      │
+          │ optional                       │  └─ static PWA                 │
+   Cloudflare quick tunnel (HTTPS) ───────►│      127.0.0.1                 │
+                                           └────────────────────────────────┘
 ```
 
----
+1. The phone signs in over HTTPS/HTTP and receives a login token.
+2. It opens a WebSocket and sends the token as the first message (never in the URL).
+3. Shells are pseudo-terminals spawned by the server. Output streams to every device attached to them, and the
+   last 100 KB are kept so a reconnecting device can redraw.
+4. If the phone falls behind (slow mobile link), the shell is paused until it catches up, so server memory stays
+   bounded even for commands like `cat` on a huge file.
+
+### Session lifetime
+
+- A **shell** lives until it exits, you close its tab, or you have no valid login left: logins expire after
+  30 minutes without a connected device or 8 hours in total. Logging out of one device keeps your shells as long as
+  another device is still logged in.
+- A **mirror tab** is a tmux client for one connection. It is detached when the connection ends (an orphaned client
+  would keep the tmux window at the phone's size); the tmux session itself is never touched.
 
 ## Security
 
-TermPilot underwent three full security audits. Current posture: **0 critical, 0 high, 0 medium vulnerabilities.**
-
 | Layer | Protection |
-|-------|-----------|
-| **Authentication** | scrypt (N=16384) password hashing, timing-safe comparison, 256-bit session tokens |
-| **Sessions** | Server-side session store, 30-min idle timeout, 8-hour absolute timeout, periodic cleanup |
-| **CSRF** | Token-based protection on all POST endpoints |
-| **WebSocket** | Token sent as first message (never in URL), 10s auth timeout, per-IP rate limiting |
-| **Authorization** | Session ownership enforced — can only interact with your own terminals |
-| **Transport** | Cloudflare Tunnel provides automatic TLS. Default bind to localhost only |
-| **PTY isolation** | Environment variable allowlist prevents server secret leakage |
-| **Input validation** | All WebSocket messages validated via Zod schemas |
-| **Headers** | CSP, X-Frame-Options DENY, X-Content-Type-Options nosniff, Referrer-Policy no-referrer |
-| **Rate limiting** | Login: 5 attempts/15min per IP. WebSocket auth: 10 attempts/min per IP |
-| **Connection limits** | Max 20 concurrent WebSocket connections, 64KB message size limit |
+|---|---|
+| Network | Binds to `127.0.0.1` unless you choose otherwise. The tunnel connects over loopback. |
+| Host check | Requests (HTTP and WebSocket) are only accepted for this machine's own names and addresses, the tunnel hostname and `--allowed-hosts`. This stops DNS-rebinding attacks from web pages you visit. Browser `Origin` headers are checked against the same list. |
+| Passwords | scrypt (N=16384) with a per-user salt; timing-safe comparison; the same work is done for unknown users. |
+| Logins | 256-bit random tokens, server-side, 30-minute idle and 8-hour absolute expiry. Expired logins are disconnected. |
+| CSRF | Token required on login and logout. |
+| Rate limits | Login: 5 failed attempts per 15 minutes per client, counted as they start (parallel guesses included); successful sign-ins do not count. WebSocket auth: 10 failed attempts per minute. Behind the tunnel the client is identified by Cloudflare's `CF-Connecting-IP`, trusted only from loopback. |
+| Authorization | Shells are visible only to the user who created them; tmux clients only to their connection. |
+| Input | Every WebSocket message is validated with Zod; frame size and connection count are capped. |
+| Shell environment | Shells receive an allowlist of variables (`HOME`, `PATH`, locale, `SSH_AUTH_SOCK`, …), so secrets in the server's environment do not leak into them. |
+| Headers | Strict CSP, `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `nosniff`, `no-referrer`, COOP/CORP. |
 
----
+Anyone who signs in gets a shell as the user running TermPilot. Treat the password like an SSH key.
 
-## Voice Commands
+## Voice commands
 
-Speak naturally. TermPilot post-processes transcripts for developer vocabulary:
+The transcript is turned into a command and shown for review before it is sent.
 
-| You say | Terminal gets |
-|---------|-------------|
-| "git status" | `git status` |
-| "git commit dash m hello" | `git commit -m hello` |
-| "ls pipe grep test" | `ls \| grep test` |
-| "cd tilde slash projects" | `cd ~/projects` |
-| "pseudo apt install node" | `sudo apt install node` |
-| "dock her ps" | `docker ps` |
+| You say | You get |
+|---|---|
+| git commit dash m hello | `git commit -m hello` |
+| git push double dash force | `git push --force` |
+| ls pipe grep test | `ls \| grep test` |
+| cd tilde slash projects | `cd ~/projects` |
+| cd dot dot slash src | `cd ../src` |
+| cat readme dot md | `cat readme.md` |
+| git add dot | `git add .` |
+| ssh deploy at sign example dot com | `ssh deploy@example.com` |
+| echo quote hello world quote | `echo "hello world"` |
+| pseudo apt install node | `sudo apt install node` |
 
-Supports 30+ symbol mappings (dash, pipe, tilde, ampersand, brackets, etc.) and common command corrections.
+Path and file symbols (`dot`, `slash`, `colon`, `at sign`, `equals`, `underscore`) join the words around them, but
+never onto the command itself (`cat slash etc` → `cat /etc`). Say **space** to keep two parts apart:
+"ls dash la space dot" → `ls -la .`. Voice needs HTTPS (use `--tunnel`) or localhost.
 
----
-
-## CLI Options
+## CLI
 
 ```
 term-pilot [options]
 
-Options:
-  --port <port>    Port to listen on (default: 3000)
-  --host <host>    Bind address (default: 127.0.0.1)
-  --tunnel         Enable Cloudflare Tunnel for remote access
-  --help, -h       Show help
-  --version, -v    Show version
+  -p, --port <port>          Port to listen on (default: 3000; the next 10 are tried if busy)
+      --host <address>       Address to bind (default: 127.0.0.1). Use 0.0.0.0 for the local network.
+      --tunnel               Expose a public HTTPS URL through Cloudflare Tunnel
+      --allowed-hosts <list> Extra hostnames the server may be reached by, comma separated
+  -h, --help                 Show help
+  -v, --version              Show the version
 
-Environment variables:
-  PORT                 Server port
-  HOST                 Bind address
-  TUNNEL=1             Enable tunnel
-  TERMPILOT_PASSWORD   Set a fixed password
+Environment: PORT, HOST, TUNNEL=1, TERMPILOT_ALLOWED_HOSTS, TERMPILOT_PASSWORD
 ```
 
----
+## Platform support
 
-## Testing
+| | Shells | Mirror mode | Tunnel | Tested in CI |
+|---|---|---|---|---|
+| macOS (arm64, x64) | `$SHELL` | tmux | yes | arm64 |
+| Linux (x64, arm64) | `$SHELL` | tmux | yes | x64 |
+| Windows (x64, arm64) | PowerShell | tmux inside WSL | yes | x64, except mirror mode (CI runners have no WSL) |
+
+On every OS, CI runs the unit and integration tests on Node 22, 24 and 26 (the test tooling needs 22+), and
+installs the packed npm package and runs the end-to-end tests on Node 20, 22 and 24.
+
+Every architecture listed has a prebuilt terminal binary; CI runs on the ones shown.
+
+Node.js 20 or newer. Installing needs no compiler on the platforms above (other platforms, such as Alpine
+Linux, compile the terminal module and need build tools).
+On Windows, mirror mode needs `wsl --install` and then `wsl sudo apt install tmux`.
+
+## Development
 
 ```bash
-pnpm test          # Run all 103 tests
-pnpm test:watch    # Watch mode
-pnpm test:coverage # With coverage
+git clone https://github.com/Abhishekreddy31/TermPilot.git
+cd TermPilot
+pnpm install        # pnpm version is pinned in package.json (use corepack)
+pnpm dev            # server and client with reload
+pnpm run check      # lint, typecheck, unit and integration tests
+pnpm run test:e2e   # builds, packs and installs the package, then drives it in mobile Chrome and Safari
 ```
 
-| Package | Tests | Coverage |
-|---------|-------|----------|
-| `@termpilot/shared` | 24 | Protocol encode/decode, Zod schema validation |
-| `@termpilot/server` | 70 | PTY lifecycle, auth, rate limiting, CSRF, WebSocket integration, tmux mirror mode |
-| `@termpilot/client` | 9 | Voice post-processing, symbol mapping |
-| **Total** | **103** | |
+Development needs Node 22.12 or newer (the published package supports Node 20).
 
----
+```
+packages/
+  shared/   protocol types (dependency-free, used by the browser) and Zod schemas (server)
+  server/   HTTP + WebSocket server, PTY and tmux management, auth, tunnel, CLI
+  client/   Preact + xterm.js PWA
+tests/
+  unit/         shared, server and client units (client components run in happy-dom)
+  integration/  a real server with real shells and an isolated tmux server
+  e2e/          the packed npm package, installed and driven by Playwright on emulated phones
+scripts/build-publish.js   builds dist/ for npm
+```
 
-## Tech Stack
+Tests never touch your own tmux sessions: each test file gets a private tmux server.
 
-| Component | Technology | Why |
-|-----------|-----------|-----|
-| Server | Node.js + TypeScript | Native PTY support via node-pty |
-| Terminal backend | node-pty | Powers VS Code's terminal |
-| WebSocket | ws + perMessageDeflate | Fast, compressed real-time communication |
-| Validation | Zod | Runtime type safety on all messages |
-| Client | Preact (3KB) + xterm.js | Minimal bundle, industry-standard terminal |
-| Build | Vite + esbuild | Fast builds, PWA support, npm bundling |
-| Voice | Web Speech API | Free, built into Chrome/Safari |
-| Remote access | Cloudflare Tunnel | Free, automatic TLS |
-| Auth | Node.js crypto (scrypt) | Zero dependencies |
-| Testing | Vitest | Fast, ESM-native |
+### Releasing
 
----
-
-## Platform Support
-
-| Platform | Independent Mode | Mirror Mode (tmux) | Tunnel |
-|----------|-----------------|-------------------|--------|
-| macOS | Full | Full | Full |
-| Linux | Full | Full | Full |
-| Windows + WSL | Full (PowerShell) | Full (via WSL) | Full |
-| Windows (no WSL) | Full (PowerShell) | Not available | Full |
-
-> **Windows users**: Mirror mode routes through WSL automatically. Just install tmux inside WSL:
-> ```bash
-> wsl --install          # Install WSL (if not already)
-> wsl sudo apt install tmux  # Install tmux inside WSL
-> ```
-
----
+1. Bump `version` in `package.json` on `main`.
+2. Push a tag `v<version>`.
+3. The release workflow runs the full CI matrix, then publishes the exact tarball it tested to npm with
+   provenance, using npm trusted publishing (no stored token), and creates the GitHub release.
 
 ## Contributing
 
-Contributions are welcome. Please:
-
-1. Fork the repo
-2. Create a feature branch (`git checkout -b feat/my-feature`)
-3. Write tests for new functionality
-4. Ensure `pnpm test` passes
-5. Submit a pull request
-
-### Development
-
-```bash
-pnpm install
-pnpm dev          # Server + client with hot reload
-pnpm dev:server   # Server only
-pnpm dev:client   # Client only (Vite HMR)
-pnpm test         # Run all tests
-pnpm run build    # Build all packages
-```
-
----
-
----
-
-<p align="center">
-  <strong>If TermPilot is useful to you, consider giving it a star.</strong><br>
-  It helps others discover the project.
-</p>
-
-<p align="center">
-  <a href="https://github.com/Abhishekreddy31/TermPilot/stargazers">
-    <img src="https://img.shields.io/github/stars/Abhishekreddy31/TermPilot?style=for-the-badge&logo=github&label=Star%20on%20GitHub&color=yellow" alt="GitHub stars">
-  </a>
-</p>
-
----
+Issues and pull requests are welcome. Please add tests with your change and make sure `pnpm run check` and
+`pnpm run test:e2e` pass.
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
+MIT, see [LICENSE](LICENSE).

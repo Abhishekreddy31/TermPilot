@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
+const devServer = process.env.TERMPILOT_DEV_SERVER ?? 'http://localhost:3000';
+
 export default defineConfig({
   plugins: [
     VitePWA({
@@ -29,21 +31,15 @@ export default defineConfig({
       },
     }),
   ],
-  esbuild: {
-    jsx: 'automatic',
-    jsxImportSource: 'preact',
-  },
-  resolve: {
-    alias: {
-      'react': 'preact/compat',
-      'react-dom': 'preact/compat',
-    },
+  oxc: {
+    jsx: { runtime: 'automatic', importSource: 'preact' },
   },
   server: {
+    // `pnpm dev` runs the TermPilot server separately; point at it with TERMPILOT_DEV_SERVER.
     proxy: {
-      '/ws': { target: 'ws://localhost:3000', ws: true },
-      '/api': { target: 'http://localhost:3000' },
-      '/health': { target: 'http://localhost:3000' },
+      '/ws': { target: devServer, ws: true },
+      '/api': { target: devServer },
+      '/health': { target: devServer },
     },
   },
   build: {

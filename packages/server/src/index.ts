@@ -1,6 +1,2 @@
-// Server entry point — delegates to CLI
-// For development: `tsx watch src/index.ts`
-// For production: `node dist/cli/cli.js`
-
-// Re-export the CLI entry point
+// Development entry point (`pnpm dev:server`); the published binary is the bundled cli.
 import './cli/cli.js';

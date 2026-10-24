@@ -2,111 +2,124 @@ import { spawn, type ChildProcess } from 'node:child_process';
 
 export type TunnelState = 'stopped' | 'starting' | 'running' | 'error';
 
-type StateHandler = (state: TunnelState, url?: string) => void;
+type StateHandler = (state: TunnelState, detail?: string) => void;
+
+// A quick-tunnel hostname. `api.trycloudflare.com` is cloudflared's own endpoint and
+// appears in its error messages (e.g. when offline), so it must not count as a tunnel URL.
+const QUICK_TUNNEL_URL = /https:\/\/(?!api\.)[a-z0-9-]+\.trycloudflare\.com(?![a-z0-9.-])/;
 
 export function parseTunnelUrl(output: string): string | null {
-  const match = output.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+  const match = output.match(QUICK_TUNNEL_URL);
   return match ? match[0] : null;
 }
 
+export function cloudflaredInstallHint(platform: NodeJS.Platform = process.platform): string {
+  switch (platform) {
+    case 'darwin':
+      return 'brew install cloudflared';
+    case 'win32':
+      return 'winget install --id Cloudflare.cloudflared';
+    default:
+      return 'see https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/';
+  }
+}
+
+export interface TunnelManagerOptions {
+  /** Address cloudflared connects to. Use the address the server listens on, not `localhost`,
+   * which may resolve to ::1 while the server only listens on 127.0.0.1. */
+  targetHost?: string;
+  /** Executable to run (default `cloudflared`), and arguments placed before cloudflared's own. */
+  command?: string;
+  commandArgs?: string[];
+}
+
+/**
+ * Runs a Cloudflare quick tunnel (`cloudflared tunnel --url`) to the local server
+ * and reports its public URL. The `running` state carries the URL; `error` carries a reason.
+ */
 export class TunnelManager {
-  private process: ChildProcess | null = null;
+  private child: ChildProcess | null = null;
   private _state: TunnelState = 'stopped';
   private _url: string | null = null;
-  private port: number;
-  private stateHandlers: StateHandler[] = [];
+  private readonly handlers = new Set<StateHandler>();
+  private readonly command: string;
+  private readonly commandArgs: string[];
+  private readonly targetUrl: string;
 
-  constructor(port: number) {
-    this.port = port;
-  }
-
-  get isRunning(): boolean {
-    return this._state === 'running';
-  }
-
-  get url(): string | null {
-    return this._url;
+  constructor(port: number, opts: TunnelManagerOptions = {}) {
+    const host = opts.targetHost ?? '127.0.0.1';
+    this.targetUrl = `http://${host.includes(':') ? `[${host}]` : host}:${port}`;
+    this.command = opts.command ?? 'cloudflared';
+    this.commandArgs = opts.commandArgs ?? [];
   }
 
   get state(): TunnelState {
     return this._state;
   }
 
-  start(): void {
-    if (this.process) {
-      return;
-    }
+  get url(): string | null {
+    return this._url;
+  }
 
+  get isRunning(): boolean {
+    return this._state === 'running';
+  }
+
+  start(): void {
+    if (this.child) return;
     this.setState('starting');
 
-    this.process = spawn('cloudflared', [
-      'tunnel',
-      '--url',
-      `http://localhost:${this.port}`,
-      '--no-autoupdate',
-    ], {
+    const args = [...this.commandArgs, 'tunnel', '--url', this.targetUrl, '--no-autoupdate'];
+    const child = spawn(this.command, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
     });
+    this.child = child;
 
-    this.process.stderr?.on('data', (data: Buffer) => {
-      const output = data.toString();
-      const url = parseTunnelUrl(output);
+    const scan = (data: Buffer) => {
+      if (this._url) return;
+      const url = parseTunnelUrl(data.toString());
       if (url) {
         this._url = url;
         this.setState('running', url);
       }
-    });
+    };
+    child.stdout?.on('data', scan);
+    child.stderr?.on('data', scan);
 
-    this.process.stdout?.on('data', (data: Buffer) => {
-      const output = data.toString();
-      const url = parseTunnelUrl(output);
-      if (url) {
-        this._url = url;
-        this.setState('running', url);
-      }
-    });
-
-    this.process.on('error', (err) => {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        console.error(
-          `cloudflared not found. Install it with: ${process.platform === 'darwin' ? 'brew install cloudflared' : process.platform === 'win32' ? 'winget install cloudflare.cloudflared' : 'curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg && sudo apt update && sudo apt install cloudflared'}`
-        );
-      }
+    child.on('error', (err: NodeJS.ErrnoException) => {
+      this.child = null;
       this._url = null;
-      this.process = null;
-      this.setState('error');
+      const reason = err.code === 'ENOENT'
+        ? `cloudflared is not installed. Install it with: ${cloudflaredInstallHint()}`
+        : `cloudflared failed to start: ${err.message}`;
+      this.setState('error', reason);
     });
 
-    this.process.on('close', () => {
+    child.on('exit', (code) => {
+      if (this.child !== child) return;
+      this.child = null;
       this._url = null;
-      this.process = null;
-      if (this._state !== 'error') {
-        this.setState('stopped');
-      }
+      if (this._state === 'stopped' || this._state === 'error') return;
+      this.setState('error', `cloudflared exited unexpectedly (code ${code ?? 'unknown'})`);
     });
   }
 
   stop(): void {
-    if (this.process) {
-      this.process.kill('SIGTERM');
-      this.process = null;
-    }
+    const child = this.child;
+    this.child = null;
     this._url = null;
     this.setState('stopped');
+    child?.kill();
   }
 
   onStateChange(handler: StateHandler): () => void {
-    this.stateHandlers.push(handler);
-    return () => {
-      const idx = this.stateHandlers.indexOf(handler);
-      if (idx >= 0) this.stateHandlers.splice(idx, 1);
-    };
+    this.handlers.add(handler);
+    return () => this.handlers.delete(handler);
   }
 
-  private setState(state: TunnelState, url?: string): void {
+  private setState(state: TunnelState, detail?: string): void {
     this._state = state;
-    for (const handler of this.stateHandlers) {
-      handler(state, url);
-    }
+    for (const handler of this.handlers) handler(state, detail);
   }
 }

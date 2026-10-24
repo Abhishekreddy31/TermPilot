@@ -1,251 +1,185 @@
 import * as pty from 'node-pty';
 import { randomUUID } from 'node:crypto';
-import { buildSafeEnv } from './safe-env.js';
 
-export interface SessionOptions {
-  cols: number;
-  rows: number;
-  shell?: string;
-  cwd?: string;
+/** What to run inside a pseudo-terminal. */
+export interface SpawnSpec {
+  file: string;
+  args: string[];
+  cwd: string;
+  env: Record<string, string>;
 }
 
-export interface Session {
-  id: string;
+export interface TerminalSize {
   cols: number;
   rows: number;
-  alive: boolean;
-  createdAt: number;
-  lastActivity: number;
 }
 
-interface InternalSession extends Session {
-  pty: pty.IPty;
-  outputBuffer: string[];
-  outputBufferSize: number;
-  dataListeners: Array<(data: string) => void>;
-  exitListeners: Array<(info: { exitCode: number; signal?: number }) => void>;
-  disposables: Array<{ dispose(): void }>;
+export interface ExitInfo {
+  exitCode: number;
+  signal?: number;
 }
 
 export interface PtyManagerOptions {
-  maxSessions: number;
-  idleTimeoutMs: number;
-  maxOutputBufferBytes?: number;
-  defaultShell?: string;
+  maxProcesses: number;
+  /** Recent output kept per process (in UTF-16 code units) so a reconnecting client can redraw. */
+  maxReplayChars: number;
 }
 
-const DEFAULT_SHELL = process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : '/bin/zsh');
-const MAX_OUTPUT_BUFFER = 100 * 1024; // 100KB
+interface PtyProcess {
+  pty: pty.IPty;
+  replay: string[];
+  replayChars: number;
+  dataListeners: Set<(data: string) => void>;
+  exitListeners: Set<(info: ExitInfo) => void>;
+  disposables: Array<{ dispose(): void }>;
+}
 
+/** The PTY operations the session registry relies on. */
+export interface PtyHost {
+  spawn(spec: SpawnSpec, size: TerminalSize): string;
+  write(id: string, data: string): void;
+  resize(id: string, size: TerminalSize): void;
+  pause(id: string): void;
+  resume(id: string): void;
+  replay(id: string): string;
+  onData(id: string, listener: (data: string) => void): () => void;
+  onExit(id: string, listener: (info: ExitInfo) => void): () => void;
+  kill(id: string): void;
+}
 
-export class PtyManager {
-  private sessions = new Map<string, InternalSession>();
-  private opts: Required<PtyManagerOptions>;
-  private idleTimer: ReturnType<typeof setInterval> | null = null;
+export class PtyLimitError extends Error {}
+export class PtyNotFoundError extends Error {}
 
-  constructor(opts: PtyManagerOptions) {
-    this.opts = {
-      maxOutputBufferBytes: MAX_OUTPUT_BUFFER,
-      defaultShell: DEFAULT_SHELL,
-      ...opts,
-    };
+/**
+ * Owns pseudo-terminal processes. Knows nothing about users or connections; the
+ * session registry layers ownership and delivery on top of it.
+ */
+export class PtyManager implements PtyHost {
+  private readonly processes = new Map<string, PtyProcess>();
 
-    // Enforce idle timeout — sweep every 60 seconds
-    if (this.opts.idleTimeoutMs > 0) {
-      this.idleTimer = setInterval(() => this.sweepIdleSessions(), 60_000);
-    }
+  constructor(private readonly opts: PtyManagerOptions) {}
+
+  get size(): number {
+    return this.processes.size;
   }
 
-  dispose(): void {
-    if (this.idleTimer) {
-      clearInterval(this.idleTimer);
-      this.idleTimer = null;
-    }
+  has(id: string): boolean {
+    return this.processes.has(id);
   }
 
-  private sweepIdleSessions(): void {
-    const now = Date.now();
-    for (const [id, session] of this.sessions) {
-      if (now - session.lastActivity > this.opts.idleTimeoutMs) {
-        try { this.destroySession(id); } catch {}
-      }
-    }
-  }
-
-  createSession(options: SessionOptions): Session {
-    if (this.sessions.size >= this.opts.maxSessions) {
-      throw new Error(
-        `Maximum ${this.opts.maxSessions} sessions reached. Destroy an existing session first.`
-      );
+  spawn(spec: SpawnSpec, size: TerminalSize): string {
+    if (this.processes.size >= this.opts.maxProcesses) {
+      throw new PtyLimitError(`Maximum of ${this.opts.maxProcesses} terminals reached. Close one first.`);
     }
 
     const id = randomUUID();
-    const shell = options.shell || this.opts.defaultShell;
-
-    const ptyProcess = pty.spawn(shell, [], {
+    const child = pty.spawn(spec.file, spec.args, {
       name: 'xterm-256color',
-      cols: options.cols,
-      rows: options.rows,
-      cwd: options.cwd || process.env.HOME || '/',
-      env: buildSafeEnv(),
+      cols: size.cols,
+      rows: size.rows,
+      cwd: spec.cwd,
+      env: spec.env,
     });
 
-    const session: InternalSession = {
-      id,
-      cols: options.cols,
-      rows: options.rows,
-      alive: true,
-      createdAt: Date.now(),
-      lastActivity: Date.now(),
-      pty: ptyProcess,
-      outputBuffer: [],
-      outputBufferSize: 0,
-      dataListeners: [],
-      exitListeners: [],
+    const proc: PtyProcess = {
+      pty: child,
+      replay: [],
+      replayChars: 0,
+      dataListeners: new Set(),
+      exitListeners: new Set(),
       disposables: [],
     };
 
-    const dataDisposable = ptyProcess.onData((data: string) => {
-      session.lastActivity = Date.now();
-      this.appendToBuffer(session, data);
-      for (const listener of session.dataListeners) {
-        listener(data);
-      }
-    });
-    session.disposables.push(dataDisposable);
-
-    const exitDisposable = ptyProcess.onExit(({ exitCode, signal }) => {
-      session.alive = false;
-      for (const listener of session.exitListeners) {
-        listener({ exitCode, signal });
-      }
-      this.cleanupSession(id);
-    });
-    session.disposables.push(exitDisposable);
-
-    this.sessions.set(id, session);
-
-    return this.toPublicSession(session);
-  }
-
-  getSession(id: string): Session | undefined {
-    const session = this.sessions.get(id);
-    return session ? this.toPublicSession(session) : undefined;
-  }
-
-  listSessions(): Session[] {
-    return Array.from(this.sessions.values()).map((s) =>
-      this.toPublicSession(s)
+    proc.disposables.push(
+      child.onData((data) => {
+        this.appendReplay(proc, data);
+        for (const listener of proc.dataListeners) listener(data);
+      }),
+      child.onExit(({ exitCode, signal }) => {
+        // Drop the entry before notifying so listeners observe a consistent manager.
+        this.release(id);
+        for (const listener of proc.exitListeners) listener({ exitCode, signal });
+        proc.exitListeners.clear();
+      }),
     );
+
+    this.processes.set(id, proc);
+    return id;
   }
 
-  writeToSession(id: string, data: string): void {
-    const session = this.getInternalSession(id);
-    session.lastActivity = Date.now();
-    session.pty.write(data);
+  write(id: string, data: string): void {
+    this.get(id).pty.write(data);
   }
 
-  resizeSession(id: string, cols: number, rows: number): void {
-    const session = this.getInternalSession(id);
-    session.pty.resize(cols, rows);
-    session.cols = cols;
-    session.rows = rows;
+  resize(id: string, size: TerminalSize): void {
+    this.get(id).pty.resize(size.cols, size.rows);
   }
 
-  destroySession(id: string): void {
-    const session = this.getInternalSession(id);
+  pause(id: string): void {
+    this.get(id).pty.pause();
+  }
+
+  resume(id: string): void {
+    this.get(id).pty.resume();
+  }
+
+  /** Recent output, oldest first. */
+  replay(id: string): string {
+    return this.get(id).replay.join('');
+  }
+
+  onData(id: string, listener: (data: string) => void): () => void {
+    const proc = this.get(id);
+    proc.dataListeners.add(listener);
+    return () => proc.dataListeners.delete(listener);
+  }
+
+  onExit(id: string, listener: (info: ExitInfo) => void): () => void {
+    const proc = this.get(id);
+    proc.exitListeners.add(listener);
+    return () => proc.exitListeners.delete(listener);
+  }
+
+  /** Terminate a process. Exit listeners still fire once node-pty reports the exit. */
+  kill(id: string): void {
+    const proc = this.processes.get(id);
+    if (!proc) return;
     try {
-      session.pty.kill();
+      proc.pty.kill();
     } catch {
-      // Process may already be dead
-    }
-    this.cleanupSession(id);
-  }
-
-  destroyAll(): void {
-    const ids = [...this.sessions.keys()];
-    for (const id of ids) {
-      try {
-        this.destroySession(id);
-      } catch {
-        // Ignore cleanup errors during bulk destroy
-      }
+      // The process has already gone; onExit will clean up.
     }
   }
 
-  onData(id: string, callback: (data: string) => void): () => void {
-    const session = this.getInternalSession(id);
-    session.dataListeners.push(callback);
-    return () => {
-      const idx = session.dataListeners.indexOf(callback);
-      if (idx >= 0) session.dataListeners.splice(idx, 1);
-    };
+  killAll(): void {
+    for (const id of [...this.processes.keys()]) this.kill(id);
   }
 
-  onExit(
-    id: string,
-    callback: (info: { exitCode: number; signal?: number }) => void
-  ): () => void {
-    const session = this.getInternalSession(id);
-    session.exitListeners.push(callback);
-    return () => {
-      const idx = session.exitListeners.indexOf(callback);
-      if (idx >= 0) session.exitListeners.splice(idx, 1);
-    };
+  private get(id: string): PtyProcess {
+    const proc = this.processes.get(id);
+    if (!proc) throw new PtyNotFoundError(`Terminal not found: ${id}`);
+    return proc;
   }
 
-  getOutputBuffer(id: string): string[] | undefined {
-    const session = this.sessions.get(id);
-    return session ? [...session.outputBuffer] : undefined;
-  }
-
-  private getInternalSession(id: string): InternalSession {
-    const session = this.sessions.get(id);
-    if (!session) {
-      throw new Error(`Session not found: ${id}`);
-    }
-    return session;
-  }
-
-  private appendToBuffer(session: InternalSession, data: string): void {
-    session.outputBuffer.push(data);
-    session.outputBufferSize += data.length;
-
-    while (session.outputBufferSize > this.opts.maxOutputBufferBytes) {
-      const removed = session.outputBuffer.shift();
-      if (removed) {
-        session.outputBufferSize -= removed.length;
-      } else {
-        break;
-      }
+  private appendReplay(proc: PtyProcess, data: string): void {
+    proc.replay.push(data);
+    proc.replayChars += data.length;
+    while (proc.replayChars > this.opts.maxReplayChars && proc.replay.length > 1) {
+      proc.replayChars -= proc.replay.shift()!.length;
     }
   }
 
-  private cleanupSession(id: string): void {
-    const session = this.sessions.get(id);
-    if (!session) return;
-
-    for (const disposable of session.disposables) {
+  private release(id: string): void {
+    const proc = this.processes.get(id);
+    if (!proc) return;
+    for (const disposable of proc.disposables) {
       try {
         disposable.dispose();
       } catch {
-        // Ignore dispose errors
+        // Disposing an already-disposed listener is harmless.
       }
     }
-    session.dataListeners = [];
-    session.exitListeners = [];
-    session.disposables = [];
-    this.sessions.delete(id);
-  }
-
-  private toPublicSession(session: InternalSession): Session {
-    return {
-      id: session.id,
-      cols: session.cols,
-      rows: session.rows,
-      alive: session.alive,
-      createdAt: session.createdAt,
-      lastActivity: session.lastActivity,
-    };
+    proc.dataListeners.clear();
+    this.processes.delete(id);
   }
 }
