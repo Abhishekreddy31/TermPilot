@@ -36,8 +36,8 @@
 - The tunnel could fail where `localhost` resolves to `::1`.
 - On Windows, shells now get the user's session environment (from the registry, as a terminal opened from the
   Start menu does): previously PowerShell stalled for about 35 seconds on its first command and user variables
-  such as `JAVA_HOME` were missing. `HOME` is no longer assumed (credentials went to `\tmp`). `$SHELL` from Git Bash is no longer used on Windows; Linux falls back to the account's
-  shell instead of `/bin/zsh`.
+  such as `JAVA_HOME` were missing. `HOME` is no longer assumed (credentials went to `\tmp`), and `$SHELL` from
+  Git Bash is no longer used. On Linux the default shell falls back to the account's shell instead of `/bin/zsh`.
 - tmux listing and attaching now use the same `TMUX_TMPDIR`; `SSH_AUTH_SOCK` is passed to shells so SSH-based git
   works.
 - Pressing Enter from voice input sends a carriage return, like a keyboard.

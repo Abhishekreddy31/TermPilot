@@ -115,7 +115,7 @@ Phone (browser / PWA)                      Your computer
 | Rate limits | Login: 5 failed attempts per 15 minutes per client, counted as they start (parallel guesses included); successful sign-ins do not count. WebSocket auth: 10 failed attempts per minute. Behind the tunnel the client is identified by Cloudflare's `CF-Connecting-IP`, trusted only from loopback. |
 | Authorization | Shells are visible only to the user who created them; tmux clients only to their connection. |
 | Input | Every WebSocket message is validated with Zod; frame size and connection count are capped. |
-| Shell environment | Shells receive an allowlist of variables (`HOME`, `PATH`, locale, `SSH_AUTH_SOCK`, …), so secrets in the server's environment do not leak into them. |
+| Shell environment | Shells get the environment of a freshly opened terminal, not the server's: an allowlist (`HOME`, `PATH`, locale, `SSH_AUTH_SOCK`, …) on macOS/Linux, where rc files set the rest, and the user's session environment from the registry on Windows. Secrets in the environment TermPilot was started from do not leak into them. |
 | Headers | Strict CSP, `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `nosniff`, `no-referrer`, COOP/CORP. |
 
 Anyone who signs in gets a shell as the user running TermPilot. Treat the password like an SSH key.
