@@ -169,7 +169,24 @@ export async function run(page: Page, spec: { command: string; output: string })
   await expectTerminalText(page, spec.output);
 }
 
+/**
+ * How the cursor's row ends when a shell waits for input: PowerShell's `PS C:\path>`
+ * (on a narrow screen only the tail of the path may share the cursor's row) or sh's `$`/`#`.
+ */
+const PROMPT_AT_CURSOR = IS_WINDOWS ? />\s*$/ : /[$#]\s*$/;
+
+/**
+ * Wait until the shell shows a prompt, as a person does before typing. Windows'
+ * console discards keys typed while it is starting a shell or handling Ctrl+C, and a
+ * Ctrl+C that arrives before PowerShell is up ends PowerShell itself.
+ */
+export async function waitForPrompt(page: Page, timeout = 15_000): Promise<void> {
+  const cursorRow = page.locator('.terminal-slot:not([hidden]) .xterm-rows > div').filter({ has: page.locator('.xterm-cursor') });
+  await expect(cursorRow).toHaveText(PROMPT_AT_CURSOR, { timeout });
+}
+
 export async function typeCommand(page: Page, command: string): Promise<void> {
+  await waitForPrompt(page);
   await activeTerminal(page).click();
   await page.keyboard.type(command);
   await page.keyboard.press('Enter');
