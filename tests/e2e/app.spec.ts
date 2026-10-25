@@ -1,6 +1,6 @@
 import { request } from 'node:http';
 import { networkInterfaces } from 'node:os';
-import { IS_WINDOWS, PASSWORD, activeTerminal, computed, expect, expectTerminalText, run, signIn, startCli, test, typeCommand } from './fixtures.js';
+import { IS_WINDOWS, PASSWORD, activeTerminal, computed, expect, expectTerminalText, run, signIn, startCli, test, typeCommand, waitForPrompt } from './fixtures.js';
 
 /** Generous for a loaded CI runner, far below the ~35 s stall this guards against. */
 const FIRST_COMMAND_BUDGET_MS = 8_000;
@@ -31,7 +31,7 @@ test.describe('phone UI', () => {
   test('answers the first command in a new shell promptly', async ({ page, app }) => {
     // With a stripped environment, Windows PowerShell stalled ~35 s on its first command.
     await signIn(page, app.url);
-    await expect(page.locator('.terminal-slot:not([hidden]) .xterm-rows')).toContainText(IS_WINDOWS ? /PS .*>/ : '$', { timeout: 15_000 });
+    await waitForPrompt(page);
     const first = computed('first-command');
     await typeCommand(page, first.command);
     await expectTerminalText(page, first.output, FIRST_COMMAND_BUDGET_MS);
@@ -54,14 +54,15 @@ test.describe('phone UI', () => {
   test('Ctrl from the extra-keys bar interrupts a running command (Ctrl+C)', async ({ page, app }) => {
     await signIn(page, app.url);
     await typeCommand(page, LONG_COMMAND);
+    // Echoed, so the prompt it was typed at can no longer pass for a fresh one.
+    await expectTerminalText(page, LONG_COMMAND);
     await page.getByRole('button', { name: 'Ctrl modifier' }).click();
     await expect(page.getByRole('button', { name: 'Ctrl modifier' })).toHaveAttribute('aria-pressed', 'true');
     await page.keyboard.type('c');
     await expect(page.getByRole('button', { name: 'Ctrl modifier' })).toHaveAttribute('aria-pressed', 'false');
-    const after = computed('interrupted');
-    await typeCommand(page, after.command);
-    // Runs well before the 60s command would have finished on its own.
-    await expectTerminalText(page, after.output, 10_000);
+    // Back at a prompt well before the 60s command would have finished on its own.
+    await waitForPrompt(page, 10_000);
+    await run(page, computed('interrupted'));
   });
 
   test('keeps shells across a page reload', async ({ page, app }) => {
