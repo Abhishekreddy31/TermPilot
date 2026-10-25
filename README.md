@@ -19,10 +19,15 @@
 <p align="center">
   <a href="#quick-start">Quick start</a> •
   <a href="#features">Features</a> •
+  <a href="#how-it-compares">Compare</a> •
   <a href="#reaching-it-from-your-phone">Access</a> •
   <a href="#security">Security</a> •
   <a href="#platform-support">Platforms</a> •
   <a href="#development">Development</a>
+</p>
+
+<p align="center">
+  <img src="docs/demo.gif" width="960" alt="Demo: one npx command on the laptop, sign in on the phone, run git and vim, answer a voice command, and approve a deploy in a mirrored tmux session from the phone">
 </p>
 
 ---
@@ -52,6 +57,21 @@ term-pilot --tunnel                        # with a public HTTPS URL
 Sign in as `admin` with the password from `~/.termpilot/credentials` (a new one is generated on every start
 unless you set `TERMPILOT_PASSWORD`).
 
+## Security in brief
+
+Whoever signs in gets a shell on your computer, so TermPilot is closed until you open it:
+
+- **Local only by default.** It listens on `127.0.0.1`; nothing else on the network can reach it.
+- **You choose the way in.** For everyday use, put it on a private network you already trust, such as
+  [Tailscale](https://tailscale.com) (`term-pilot --host <your Tailscale IP>`). `--tunnel` is opt-in: it gives a public
+  HTTPS URL through a Cloudflare quick tunnel, which Cloudflare intends for testing, so use it when you need it and
+  stop it afterwards.
+- **No TermPilot account or server.** Traffic goes from your phone to your computer through the path you picked.
+- **Hardened by default:** a strong random password on every start, expiring logins, rate-limited sign-in, Host and
+  Origin checks against DNS rebinding, and shells that do not inherit the server's secrets.
+
+Details in [Security](#security).
+
 ## Features
 
 | | |
@@ -63,13 +83,30 @@ unless you set `TERMPILOT_PASSWORD`).
 | **Touch** | Swipe to scroll 5,000 lines of scrollback. |
 | **PWA** | Add it to the home screen for a full-screen app. Updates install themselves. |
 
+## How it compares
+
+Several good tools put your computer within reach of your phone. They suit different jobs:
+
+| | **TermPilot** | AI coding-agent vendors' own apps | [Happy](https://github.com/slopus/happy) | [VibeTunnel](https://github.com/amantus-ai/vibetunnel) | Tailscale + Termius + tmux |
+|---|---|---|---|---|---|
+| **On the phone** | A real shell: vim, htop, git, any CLI | The agent's chat and approvals | Agent chat and approvals | A real shell | A real shell over SSH |
+| **Works with** | Anything you run in a terminal | That vendor's agent | Several coding agents | Anything | Anything |
+| **Setup** | One `npx` command | Built into the vendor's apps | Desktop app or CLI, plus its phone app | Mac app or npm package | Tailscale, SSH server, SSH app, tmux |
+| **Account** | None | Vendor account | Your agent subscriptions | None | Tailscale account |
+| **Traffic goes through** | Your own network or tunnel | The vendor's servers | Happy's end-to-end encrypted relay | Your own network or tunnel | Your tailnet |
+| **Native app, push notifications** | No (installable web app) | Yes | Yes | Mac app; iOS app in progress | Native app, no push |
+
+TermPilot also has voice-to-command with review, tmux mirroring, a phone key bar and Windows hosts. If you
+mainly want a notification when your agent needs you, a vendor app or Happy fits better today.
+
 ## Reaching it from your phone
 
 TermPilot listens on `127.0.0.1` by default, so nothing on the network can reach it until you choose how:
 
 | Option | Command | Notes |
 |---|---|---|
-| **Tunnel** (recommended) | `term-pilot --tunnel` | HTTPS URL that works from anywhere. Needs [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) (`brew install cloudflared`, `winget install --id Cloudflare.cloudflared`). |
+| **Private network** (recommended for daily use) | `term-pilot --host <your VPN address>` | With [Tailscale](https://tailscale.com) or another VPN, only your own devices can reach it, from anywhere. Requests are accepted for that address only (add a MagicDNS name with `--allowed-hosts`). The VPN encrypts the traffic, but the page itself is plain HTTP, so browsers disable voice input; for voice, put an HTTPS proxy in front (last row). |
+| **Tunnel** | `term-pilot --tunnel` | Public HTTPS URL that works from anywhere, with no setup. Needs [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) (`brew install cloudflared`, `winget install --id Cloudflare.cloudflared`). Quick tunnels are meant for testing: anyone with the URL reaches the sign-in page, so stop it when you are done. |
 | **Same Wi-Fi** | `term-pilot --host 0.0.0.0` | Prints the computer's network addresses. Plain HTTP, so traffic is visible to the network, and browsers disable voice input on non-HTTPS pages. |
 | **Your own domain / proxy** | `term-pilot --allowed-hosts term.example.com` | Requests are only accepted for known hostnames (see [Security](#security)); add yours. A leading dot allows subdomains: `.example.com`. |
 
