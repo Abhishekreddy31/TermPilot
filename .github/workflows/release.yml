@@ -49,7 +49,15 @@ jobs:
           path: pkg
       - name: Publish
         shell: bash
-        run: npm publish "$(ls pkg/*.tgz)" --access public --provenance
+        run: |
+          shopt -s nullglob
+          tarballs=(pkg/*.tgz)
+          if [ "${#tarballs[@]}" -ne 1 ]; then
+            echo "Expected exactly one tarball in pkg/, found ${#tarballs[@]}" >&2
+            exit 1
+          fi
+          # The ./ prefix makes npm read a file path; a bare "pkg/x.tgz" parses as a GitHub owner/repo spec.
+          npm publish "./${tarballs[0]}" --access public --provenance
       - name: Create GitHub release
         shell: bash
         env:
