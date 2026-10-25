@@ -1,7 +1,7 @@
 {
   "name": "@abhishekreddy31/term-pilot",
-  "version": "1.1.0",
-  "description": "Control your laptop's terminal from your phone. Voice commands, multi-session tabs, tmux mirroring, remote access.",
+  "version": "1.1.1",
+  "description": "Your computer's real terminal on your phone, with one npx command. Persistent shells, voice commands, tabs, tmux mirroring, and access over Tailscale or a Cloudflare tunnel.",
   "license": "MIT",
   "author": "Abhishek Reddy <abhisheksingireddy31@gmail.com> (https://github.com/Abhishekreddy31)",
   "repository": {
@@ -24,6 +24,12 @@
     "developer-tools",
     "node-pty",
     "cloudflare-tunnel",
+    "tailscale",
+    "web-terminal",
+    "self-hosted",
+    "remote-access",
+    "phone",
+    "ai-agents",
     "cli"
   ],
   "bin": {

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.1
+
+- README: a demo, a short security overview, a comparison with similar tools, and a private network such as
+  Tailscale as the recommended way to reach TermPilot day to day. No code changes.
+
 ## 1.1.0
 
 ### Changes that may affect you
