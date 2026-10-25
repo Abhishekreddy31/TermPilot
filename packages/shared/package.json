@@ -22,7 +22,7 @@
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "devDependencies": {
-    "typescript": "^5.9.3"
+    "typescript": "~6.0.3"
   },
   "dependencies": {
     "zod": "^4.6.7"

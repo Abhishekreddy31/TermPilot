@@ -5,8 +5,17 @@ updates:
     schedule:
       interval: weekly
     groups:
+      # Minor and patch updates land together; each major update gets its own
+      # pull request so one breaking change does not hold back the rest.
       dev-tooling:
         dependency-type: development
+        update-types: [minor, patch]
+    ignore:
+      # Node type definitions track the oldest supported runtime (engines.node),
+      # so code using newer Node APIs fails to type-check. Raise this together
+      # with engines.node.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
     open-pull-requests-limit: 10
   - package-ecosystem: github-actions
     directory: /

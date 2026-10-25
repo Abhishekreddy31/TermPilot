@@ -6,6 +6,7 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
     "jsxImportSource": "preact",
+    "types": ["vite/client"],
     "noEmit": true
   },
   "include": ["src/**/*"],
