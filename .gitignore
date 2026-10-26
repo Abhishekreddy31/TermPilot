@@ -13,3 +13,6 @@ INTERNALS.md
 playwright-report/
 test-results/
 pkg/
+
+# Untracked working files (launch notes, recordings)
+local/
