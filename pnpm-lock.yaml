@@ -184,7 +184,7 @@ importers:
         version: 1.64.1
       '@testing-library/preact':
         specifier: ^3.2.6
-        version: 3.2.6(preact@11.0.2)
+        version: 3.2.6(preact@11.1.0)
       '@types/node':
         specifier: ^20.19.43
         version: 20.19.43
@@ -211,7 +211,7 @@ importers:
         version: 21.0.4
       preact:
         specifier: ^11.0.2
-        version: 11.0.2
+        version: 11.1.0
       typescript:
         specifier: ~6.0.3
         version: 6.0.3
@@ -238,7 +238,7 @@ importers:
         version: 6.0.0
       preact:
         specifier: ^11.0.2
-        version: 11.0.2
+        version: 11.1.0
     devDependencies:
       '@types/node':
         specifier: ^20.19.43
@@ -2380,8 +2380,8 @@ packages:
     resolution: {integrity: sha512-YUbWYCgErwnMAVkjUnYa+KlMBzGpHwiIt/DE7f0G33AuX2LH9UcTk6KgWxd3zRU+pN3u/C+Xl3EnMLM4Hea7Sg==}
     engines: {node: ^10 || ^12 || >=14}
 
-  preact@11.0.2:
-    resolution: {integrity: sha512-ofG+Lqznbt13JKDjdWPLTo5ONBqcNgidqnLRzJBG6PZjzGXOLRd5y9r448+HUofTyDbgKWVrPhHP0IgcxEZslQ==}
+  preact@11.1.0:
+    resolution: {integrity: sha512-hz1VsjWx5pSYPDVEzb9w+XyOmQpP1qW/ZEaMiYm+C8ykJr8KP+TKGZIbCW0QmZ/Yr/jg3XkZoziEWn9iWHZ9Mw==}
     peerDependencies:
       preact-render-to-string: '>=6.7.0'
     peerDependenciesMeta:
@@ -3938,10 +3938,10 @@ snapshots:
       picocolors: 1.1.1
       pretty-format: 27.5.1
 
-  '@testing-library/preact@3.2.6(preact@11.0.2)':
+  '@testing-library/preact@3.2.6(preact@11.1.0)':
     dependencies:
       '@testing-library/dom': 10.4.2
-      preact: 11.0.2
+      preact: 11.1.0
 
   '@trickfilm400/rollup-plugin-off-main-thread@3.0.0-pre1':
     dependencies:
@@ -5050,7 +5050,7 @@ snapshots:
       picocolors: 1.1.1
       source-map-js: 1.2.2
 
-  preact@11.0.2: {}
+  preact@11.1.0: {}
 
   prelude-ls@1.2.1: {}
 
