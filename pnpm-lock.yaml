@@ -171,7 +171,7 @@ importers:
         version: 1.2.0-beta.18
       ws:
         specifier: ^8.22.0
-        version: 8.22.0
+        version: 8.22.1
       zod:
         specifier: ^4.6.7
         version: 4.6.7
@@ -269,7 +269,7 @@ importers:
         version: 1.2.0-beta.18
       ws:
         specifier: ^8.22.0
-        version: 8.22.0
+        version: 8.22.1
     devDependencies:
       '@types/node':
         specifier: ^20.19.43
@@ -2878,8 +2878,8 @@ packages:
   workbox-window@7.4.1:
     resolution: {integrity: sha512-notZDH2u8VXaqyuD7xaqIfEFi6SRM4SUSd7ewe9PDsVqADuepxX2ZMY3uvuZGxzY5ZOsGC/vD3A/3smFtJt4/A==}
 
-  ws@8.22.0:
-    resolution: {integrity: sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==}
+  ws@8.22.1:
+    resolution: {integrity: sha512-oyL6OPYme/CmiFvNuGzeoxCJ4nOrZE2O1FwM9MWM1AsGri6nLXB2pg+lNA8aLeXMSav0J6eIVS1j6vUPzUtK9g==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -4659,7 +4659,7 @@ snapshots:
       buffer-image-size: 0.6.4
       entities: 7.0.1
       whatwg-mimetype: 3.0.0
-      ws: 8.22.0
+      ws: 8.22.1
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -5666,7 +5666,7 @@ snapshots:
       '@types/trusted-types': 2.0.7
       workbox-core: 7.4.1
 
-  ws@8.22.0: {}
+  ws@8.22.1: {}
 
   yallist@3.1.1: {}
 
